@@ -319,6 +319,62 @@ def patch_buffer_width(text: str, rel: str) -> str:
     )
 
 
+def patch_w4a16_dense_mlp(text: str) -> str:
+    """Keep W4A16 BF16 dense/shared MLP unquantized after gate/up fusion.
+
+    canada-quant ignore lists ``gate_proj``/``up_proj``; vLLM fuses them into
+    ``gate_up_proj``. Without this, compressed-tensors quantizes the fused
+    module and load_weights KeyErrors on ``layers.0.mlp.gate_up_proj.weight``.
+    """
+    if "packed_modules_mapping" in text and "quant_config=None" in text:
+        return text
+    text = replace_once(
+        text,
+        "                quant_config=quant_config,\n"
+        "                is_sequence_parallel=self.is_sequence_parallel,\n"
+        "                reduce_results=False,\n"
+        "                prefix=f\"{prefix}.shared_experts\",\n",
+        "                quant_config=None,  # [glm53-sm121-mla] W4A16 shared experts stay BF16\n"
+        "                is_sequence_parallel=self.is_sequence_parallel,\n"
+        "                reduce_results=False,\n"
+        "                prefix=f\"{prefix}.shared_experts\",\n",
+        "w4a16-shared-experts",
+    )
+    text = replace_once(
+        text,
+        "            self.mlp = Glm5NextMLP(\n"
+        "                hidden_size=self.hidden_size,\n"
+        "                intermediate_size=config.intermediate_size,\n"
+        "                hidden_act=config.hidden_act,\n"
+        "                quant_config=quant_config,\n"
+        "                prefix=f\"{prefix}.mlp\",\n",
+        "            self.mlp = Glm5NextMLP(\n"
+        "                hidden_size=self.hidden_size,\n"
+        "                intermediate_size=config.intermediate_size,\n"
+        "                hidden_act=config.hidden_act,\n"
+        "                quant_config=None,  # [glm53-sm121-mla] W4A16 dense MLP 0-2 stay BF16\n"
+        "                prefix=f\"{prefix}.mlp\",\n",
+        "w4a16-dense-mlp",
+    )
+    if "packed_modules_mapping" not in text:
+        marker = "class Glm5NextForCausalLM(\n"
+        idx = text.find(marker)
+        if idx < 0:
+            raise SystemExit("anchor error [w4a16-packed-mapping]: class not found")
+        close = text.find(":\n", idx)
+        if close < 0:
+            raise SystemExit("anchor error [w4a16-packed-mapping]: class header")
+        insert_at = close + 2
+        text = (
+            text[:insert_at]
+            + "    packed_modules_mapping = {\n"
+            '        "gate_up_proj": ["gate_proj", "up_proj"],\n'
+            "    }\n"
+            + text[insert_at:]
+        )
+    return text
+
+
 def patch_sparse_block(text: str) -> str:
     if MARK in text:
         return text
@@ -400,6 +456,11 @@ def verify(work: Path) -> None:
             raise SystemExit(f"verify: buffer_width not patched in {name}")
         if "buffer_width = topk_tokens + (kpool" in src:
             raise SystemExit(f"verify: buffer_width not patched in {name}")
+        if name == "glm5next_model.py":
+            if "quant_config=None,  # [glm53-sm121-mla] W4A16 dense MLP" not in src:
+                raise SystemExit("verify: W4A16 dense MLP quant_config=None missing")
+            if '"gate_up_proj": ["gate_proj", "up_proj"]' not in src:
+                raise SystemExit("verify: packed_modules_mapping missing")
     kpool = (work / "sparse_attn_indexer_kpool.py").read_text()
     if kpool.count("pool_ids[:, : select_k - 1]") != 2:
         raise SystemExit("verify: indexer pool trim count != 2")
@@ -456,7 +517,9 @@ def main() -> int:
         "flashinfer_mla_sparse.py": patch_sparse_block(pristine["sparse.py"]),
         "cuda.py": patch_cuda_align(pristine["cuda.py"]),
         "sparse_attn_indexer_kpool.py": patch_indexer(indexer_base),
-        "glm5next_model.py": patch_buffer_width(pristine["glm_model.py"], "model.py"),
+        "glm5next_model.py": patch_w4a16_dense_mlp(
+            patch_buffer_width(pristine["glm_model.py"], "model.py")
+        ),
         "glm5next_mtp.py": patch_buffer_width(pristine["glm_mtp.py"], "mtp.py"),
     }
     for name, text in patched.items():

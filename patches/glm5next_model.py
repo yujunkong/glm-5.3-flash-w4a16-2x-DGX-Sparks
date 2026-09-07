@@ -213,11 +213,15 @@ class Glm5NextMoE(nn.Module):
         else:
             intermediate_size = config.moe_intermediate_size * config.n_shared_experts
 
+            # W4A16 ignore list keeps shared_experts as BF16 (gate_proj/up_proj/
+            # down_proj). vLLM fuses them into gate_up_proj, so passing the
+            # global compressed-tensors config would quantize the fused module
+            # and drop `.weight` → KeyError on load.
             self.shared_experts = Glm5NextMLP(
                 hidden_size=config.hidden_size,
                 intermediate_size=intermediate_size,
                 hidden_act=config.hidden_act,
-                quant_config=quant_config,
+                quant_config=None,
                 is_sequence_parallel=self.is_sequence_parallel,
                 reduce_results=False,
                 prefix=f"{prefix}.shared_experts",
@@ -351,11 +355,14 @@ class Glm5NextDecoderLayer(nn.Module):
                 prefix=f"{prefix}.mlp",
             )
         else:
+            # Dense layers 0–2 stay BF16 in the W4A16 checkpoint. Ignore
+            # entries name the unfused HF keys (gate_proj/up_proj); vLLM's
+            # fused gate_up_proj would otherwise be quantized.
             self.mlp = Glm5NextMLP(
                 hidden_size=self.hidden_size,
                 intermediate_size=config.intermediate_size,
                 hidden_act=config.hidden_act,
-                quant_config=quant_config,
+                quant_config=None,
                 prefix=f"{prefix}.mlp",
                 swiglu_limit=config.swiglu_limit,
             )
@@ -793,6 +800,17 @@ class Glm5NextModel(nn.Module, EagleModelMixin):
         else:
             expert_params_mapping = []
         params_dict = dict(self.named_parameters())
+        # TEMP: collect on DGX, then remove — do not guess mapping from this machine
+        print(
+            "DEBUG GATE:",
+            [k for k in params_dict if "gate_up_proj" in k][:20],
+            flush=True,
+        )
+        print(
+            "DEBUG LAYER0 MLP:",
+            [k for k in params_dict if "layers.0.mlp" in k][:40],
+            flush=True,
+        )
         loaded_params: set[str] = set()
 
         # GLM5-Next NoPE: checkpoint's kv_a_proj_with_mqa has only kv_lora_rank
@@ -860,20 +878,15 @@ class Glm5NextModel(nn.Module, EagleModelMixin):
                 if ("mlp.experts." in name) and name not in params_dict:
                     continue
                 name_mapped = name.replace(weight_name, param_name)
-                if name_mapped.startswith("language_model.model."):
-                    name_mapped = name_mapped[len("language_model.model."):]
-
                 # QKV fusion: skip if fused module doesn't exist in model
                 if param_name == ".fused_qkv_a_proj" and name_mapped not in params_dict:
-                   continue
-
+                    continue
+                name = name_mapped
                 # Skip loading extra bias for GPTQ models.
                 if name.endswith(".bias") and name not in params_dict:
-                   continue
-
+                    continue
                 if is_pp_missing_parameter(name, self):
-                   continue
-
+                    continue
                 param = params_dict[name]
                 weight_loader = param.weight_loader
                 weight_loader(param, loaded_weight, shard_id)
@@ -928,6 +941,23 @@ class Glm5NextModel(nn.Module, EagleModelMixin):
 class Glm5NextForCausalLM(
     nn.Module, HasInnerState, SupportsPP, SupportsEagle3, MixtureOfExperts, IsHybrid
 ):
+    # Lets compressed-tensors map fused gate_up_proj back to the HF ignore
+    # list (gate_proj / up_proj) so dense/shared-expert BF16 layers stay
+    # unquantized even if a caller still passes quant_config.
+    packed_modules_mapping = {
+        "gate_up_proj": ["gate_proj", "up_proj"],
+        "fused_qkv_a_proj": ["q_a_proj", "kv_a_proj_with_mqa"],
+        "wk_weights_proj": ["wk", "weights_proj"],
+        "in_proj_qkvbfg_a": [
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "b_proj",
+            "f_a_proj",
+            "g_a_proj",
+        ],
+    }
+
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
         super().__init__()
         self.model_config = vllm_config.model_config

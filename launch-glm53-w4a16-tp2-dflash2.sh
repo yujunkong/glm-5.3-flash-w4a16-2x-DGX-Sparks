@@ -92,6 +92,18 @@ if [ "${GLM53_SM121_MLA:-0}" != "1" ] && [ -n "${PATCH_KPOOL_HOST:-}" ] && [ -f 
   echo "[patch] SM121 sparse_attn_indexer_kpool mounted"
 fi
 
+# W4A16 dense-MLP loader: checkpoint ignore uses unfused gate_proj/up_proj;
+# stock vLLM quantizes fused gate_up_proj and KeyErrors on `.weight`.
+# When SM121=1 the overlay generates model.py (buffer_width) and applies the
+# same quant_config=None / packed_modules_mapping fix there.
+_GLM_MODEL_PATCH="${GLM_MODEL_PATCH:-$SCRIPT_DIR/patches/glm5next_model.py}"
+if [ "${GLM53_SM121_MLA:-0}" != "1" ] && [ -f "$_GLM_MODEL_PATCH" ]; then
+  PATCH_ARGS+=(
+    -v "$_GLM_MODEL_PATCH:/usr/local/lib/python3.12/dist-packages/vllm/models/glm5next/nvidia/model.py:ro"
+  )
+  echo "[patch] glm5next_model.py mounted (W4A16 gate_up_proj load fix)"
+fi
+
 # APC patch: hybrid prefix-cache zeroed by the drafter SWA group (stock vLLM
 # marks every eagle group and the drafter SWA zeroes the hybrid min -> 0 hits).
 # Source: overlay/patch_hybrid_prefix_hit.py from the GLM-5.3-Flash-EXL3 repo
