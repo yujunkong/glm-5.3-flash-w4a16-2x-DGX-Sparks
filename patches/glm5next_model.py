@@ -770,7 +770,8 @@ class Glm5NextModel(nn.Module, EagleModelMixin):
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
         stacked_params_mapping = [
-            # (param_name, shard_name, shard_id)
+            # DGX params_dict: layers.{0,1,2}.mlp.gate_up_proj.weight
+            # checkpoint: ...layers.N.mlp.{gate_proj,up_proj}.weight
             (".gate_up_proj", ".gate_proj", 0),
             (".gate_up_proj", ".up_proj", 1),
             # MLA: fuse q_a_proj and kv_a_proj_with_mqa
@@ -800,17 +801,6 @@ class Glm5NextModel(nn.Module, EagleModelMixin):
         else:
             expert_params_mapping = []
         params_dict = dict(self.named_parameters())
-        # TEMP: collect on DGX, then remove — do not guess mapping from this machine
-        print(
-            "DEBUG GATE:",
-            [k for k in params_dict if "gate_up_proj" in k][:20],
-            flush=True,
-        )
-        print(
-            "DEBUG LAYER0 MLP:",
-            [k for k in params_dict if "layers.0.mlp" in k][:40],
-            flush=True,
-        )
         loaded_params: set[str] = set()
 
         # GLM5-Next NoPE: checkpoint's kv_a_proj_with_mqa has only kv_lora_rank
