@@ -1,0 +1,11 @@
+# GLM-5.3-Flash W4A16: vLLM gate/up weight-loader fix
+#
+# The base image is kept unchanged except for the GLM5Next model mapping:
+# gate_proj + up_proj -> fused gate_up_proj.
+FROM radixark/vllm-glm53-flash:sm121-v11-dflash2
+
+COPY docs/patch_gate_up_mapping.py /tmp/patch_gate_up_mapping.py
+
+RUN python3 /tmp/patch_gate_up_mapping.py \
+      /usr/local/lib/python3.12/dist-packages/vllm/models/glm5next/nvidia/model.py \
+    && rm -f /tmp/patch_gate_up_mapping.py
