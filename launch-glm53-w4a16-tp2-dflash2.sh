@@ -104,6 +104,43 @@ if [ "${GLM53_SM121_MLA:-0}" != "1" ] && [ -f "$_GLM_MODEL_PATCH" ]; then
   echo "[patch] glm5next_model.py mounted (W4A16 gate_up_proj load fix)"
 fi
 
+# DFlash2 selector_top_k overlay. Both files independently consume top_k
+# (lm_head candidate pool vs path-walk tensors); they must stay in sync.
+# Default is checkpoint 16. selector_rank is a trained codebook dim — not patched.
+_DFLASH2_MODEL_PATCH="${DFLASH2_MODEL_PATCH:-$SCRIPT_DIR/patches/qwen3_dflash2.py}"
+_DFLASH2_SPEC_PATCH="${DFLASH2_SPEC_PATCH:-$SCRIPT_DIR/patches/dflash2_speculator.py}"
+if [ -f "$_DFLASH2_MODEL_PATCH" ]; then
+  PATCH_ARGS+=(
+    -v "$_DFLASH2_MODEL_PATCH:/usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/qwen3_dflash2.py:ro"
+  )
+  echo "[patch] qwen3_dflash2.py mounted (selector_top_k override)"
+fi
+if [ -f "$_DFLASH2_SPEC_PATCH" ]; then
+  PATCH_ARGS+=(
+    -v "$_DFLASH2_SPEC_PATCH:/usr/local/lib/python3.12/dist-packages/vllm/v1/worker/gpu/spec_decode/dflash2/speculator.py:ro"
+  )
+  echo "[patch] dflash2_speculator.py mounted (selector_top_k override)"
+fi
+
+# DFlash _prepare_dflash_inputs_kernel JIT warmup (profile/dummy runs skip it).
+_DFLASH_WARMUP_PATCH="${DFLASH_WARMUP_PATCH:-$SCRIPT_DIR/patches/spec_decode_rejection_warmup.py}"
+if [ -f "$_DFLASH_WARMUP_PATCH" ]; then
+  PATCH_ARGS+=(
+    -v "$_DFLASH_WARMUP_PATCH:/usr/local/lib/python3.12/dist-packages/vllm/model_executor/warmup/spec_decode_rejection_warmup.py:ro"
+  )
+  echo "[patch] spec_decode_rejection_warmup.py mounted (DFlash prepare JIT)"
+fi
+
+# GLM mHC TileLang warmup. Stock deepseek_v4_mhc_warmup returns immediately
+# for glm5_next, so C2/C6 prefill JITs mhc_pre_big_fuse_with_norm_tilelang.
+_MHC_WARMUP_PATCH="${MHC_WARMUP_PATCH:-$SCRIPT_DIR/patches/deepseek_v4_mhc_warmup.py}"
+if [ -f "$_MHC_WARMUP_PATCH" ]; then
+  PATCH_ARGS+=(
+    -v "$_MHC_WARMUP_PATCH:/usr/local/lib/python3.12/dist-packages/vllm/model_executor/warmup/deepseek_v4_mhc_warmup.py:ro"
+  )
+  echo "[patch] deepseek_v4_mhc_warmup.py mounted (GLM mHC TileLang JIT)"
+fi
+
 # APC patch: hybrid prefix-cache zeroed by the drafter SWA group (stock vLLM
 # marks every eagle group and the drafter SWA zeroes the hybrid min -> 0 hits).
 # Source: overlay/patch_hybrid_prefix_hit.py from the GLM-5.3-Flash-EXL3 repo
@@ -190,6 +227,12 @@ if [ -n "${KV_CACHE_MEMORY:-}" ]; then KV_ARGS=(--kv-cache-memory "$KV_CACHE_MEM
 AUTOTUNE_ARGS=()
 if [ "${DISABLE_FLASHINFER_AUTOTUNE:-0}" = "1" ]; then AUTOTUNE_ARGS=(--no-enable-flashinfer-autotune); fi
 
+# Production default is eager (ENFORCE_EAGER=1). 0 drops --enforce-eager so
+# Torch Compile / CUDA Graphs can run for A/B; DFlash falls back to eager
+# draft if the attention backend cannot capture FULL graphs.
+EAGER_ARGS=()
+if [ "${ENFORCE_EAGER:-1}" = "1" ]; then EAGER_ARGS=(--enforce-eager); fi
+
 # speculative config (correct per method)
 # SM120 (GLM53_SM121_MLA=1): the target canonicalizes the global cache to
 # fp8_ds_mla, which no non-MLA backend accepts. The DFlash2 drafter inherits the
@@ -253,6 +296,9 @@ docker run --gpus all -d \
   -e TORCH_NCCL_ASYNC_ERROR_HANDLING=1 \
   -e VLLM_MARLIN_USE_ATOMIC_ADD="${VLLM_MARLIN_USE_ATOMIC_ADD:-0}" \
   -e VLLM_USE_FUSED_MOE_GROUPED_TOPK="${VLLM_USE_FUSED_MOE_GROUPED_TOPK:-0}" \
+  -e DFLASH_SELECTOR_TOP_K="${DFLASH_SELECTOR_TOP_K:-}" \
+  -e DFLASH_WALK_MODE="${DFLASH_WALK_MODE:-edge}" \
+  -e DFLASH2_ACC_PROBE="${DFLASH2_ACC_PROBE:-0}" \
   "$IMAGE" \
     "$MODEL_PATH" \
     --served-model-name "${SERVED_MODEL_NAME:-glm-5.3-flash}" \
@@ -267,7 +313,7 @@ docker run --gpus all -d \
     "${SCHED_ARGS[@]}" \
     "${AUTOTUNE_ARGS[@]}" \
     "${SM121_ARGS[@]}" \
-    --enforce-eager --max-num-batched-tokens "$MAX_NUM_BATCHED_TOKENS" \
+    "${EAGER_ARGS[@]}" --max-num-batched-tokens "$MAX_NUM_BATCHED_TOKENS" \
     "${SPEC_ARGS[@]}" \
     --tool-call-parser glm47 --enable-auto-tool-choice \
     --reasoning-parser glm45 \

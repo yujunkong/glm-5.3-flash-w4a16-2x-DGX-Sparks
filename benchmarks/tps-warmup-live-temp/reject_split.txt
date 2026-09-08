@@ -1,0 +1,66 @@
+warmup (discarded)...
+{"request_id": 0, "acceptance_ratio": 0.3816, "accepted_count": 187.0, "drafted_count": 490.0, "drafts": 70.0, "pos0_accept": 51.0, "pos1_accept": 38.0, "pos2_accept": 31.0, "pos3_accept": 24.0, "pos4_accept": 21.0, "pos5_accept": 13.0, "pos6_accept": 9.0, "lm_head_topk_miss": 0.0, "lm_head_topk_hit_walk_miss": 0.0, "walk_hit_verify_reject": 0.0, "b_unary_would_hit": 0.0, "b_unary_also_miss": 0.0, "b_tgt_unary_rank0": 0.0, "b_tgt_unary_rank_le2": 0.0, "b_tgt_unary_rank_le7": 0.0, "b_tgt_edge_rank_sum": 0.0, "b_tgt_edge_rank_n": 0.0, "reject_at_pos": [0, 0, 0, 0, 0, 0, 0], "rejected_rounds": 0, "in_topk": 0.0, "not_in_topk": 0.0, "wall_s": 8.663, "completion_tokens": 256}
+{"request_id": 1, "acceptance_ratio": 0.3742, "accepted_count": 186.0, "drafted_count": 497.0, "drafts": 71.0, "pos0_accept": 56.0, "pos1_accept": 45.0, "pos2_accept": 32.0, "pos3_accept": 22.0, "pos4_accept": 17.0, "pos5_accept": 9.0, "pos6_accept": 5.0, "lm_head_topk_miss": 0.0, "lm_head_topk_hit_walk_miss": 0.0, "walk_hit_verify_reject": 0.0, "b_unary_would_hit": 0.0, "b_unary_also_miss": 0.0, "b_tgt_unary_rank0": 0.0, "b_tgt_unary_rank_le2": 0.0, "b_tgt_unary_rank_le7": 0.0, "b_tgt_edge_rank_sum": 0.0, "b_tgt_edge_rank_n": 0.0, "reject_at_pos": [0, 0, 0, 0, 0, 0, 0], "rejected_rounds": 0, "in_topk": 0.0, "not_in_topk": 0.0, "wall_s": 8.793, "completion_tokens": 256}
+{"request_id": 2, "acceptance_ratio": 0.4738, "accepted_count": 199.0, "drafted_count": 420.0, "drafts": 60.0, "pos0_accept": 50.0, "pos1_accept": 43.0, "pos2_accept": 34.0, "pos3_accept": 24.0, "pos4_accept": 20.0, "pos5_accept": 15.0, "pos6_accept": 13.0, "lm_head_topk_miss": 0.0, "lm_head_topk_hit_walk_miss": 0.0, "walk_hit_verify_reject": 0.0, "b_unary_would_hit": 0.0, "b_unary_also_miss": 0.0, "b_tgt_unary_rank0": 0.0, "b_tgt_unary_rank_le2": 0.0, "b_tgt_unary_rank_le7": 0.0, "b_tgt_edge_rank_sum": 0.0, "b_tgt_edge_rank_n": 0.0, "reject_at_pos": [0, 0, 0, 0, 0, 0, 0], "rejected_rounds": 0, "in_topk": 0.0, "not_in_topk": 0.0, "wall_s": 7.492, "completion_tokens": 256}
+{"request_id": 3, "acceptance_ratio": 0.4667, "accepted_count": 196.0, "drafted_count": 420.0, "drafts": 60.0, "pos0_accept": 50.0, "pos1_accept": 38.0, "pos2_accept": 31.0, "pos3_accept": 26.0, "pos4_accept": 21.0, "pos5_accept": 15.0, "pos6_accept": 15.0, "lm_head_topk_miss": 0.0, "lm_head_topk_hit_walk_miss": 0.0, "walk_hit_verify_reject": 0.0, "b_unary_would_hit": 0.0, "b_unary_also_miss": 0.0, "b_tgt_unary_rank0": 0.0, "b_tgt_unary_rank_le2": 0.0, "b_tgt_unary_rank_le7": 0.0, "b_tgt_edge_rank_sum": 0.0, "b_tgt_edge_rank_n": 0.0, "reject_at_pos": [0, 0, 0, 0, 0, 0, 0], "rejected_rounds": 0, "in_topk": 0.0, "not_in_topk": 0.0, "wall_s": 7.472, "completion_tokens": 256}
+{"request_id": 4, "acceptance_ratio": 0.4376, "accepted_count": 193.0, "drafted_count": 441.0, "drafts": 63.0, "pos0_accept": 55.0, "pos1_accept": 46.0, "pos2_accept": 36.0, "pos3_accept": 25.0, "pos4_accept": 15.0, "pos5_accept": 9.0, "pos6_accept": 7.0, "lm_head_topk_miss": 0.0, "lm_head_topk_hit_walk_miss": 0.0, "walk_hit_verify_reject": 0.0, "b_unary_would_hit": 0.0, "b_unary_also_miss": 0.0, "b_tgt_unary_rank0": 0.0, "b_tgt_unary_rank_le2": 0.0, "b_tgt_unary_rank_le7": 0.0, "b_tgt_edge_rank_sum": 0.0, "b_tgt_edge_rank_n": 0.0, "reject_at_pos": [0, 0, 0, 0, 0, 0, 0], "rejected_rounds": 0, "in_topk": 0.0, "not_in_topk": 0.0, "wall_s": 7.736, "completion_tokens": 256}
+{"request_id": 5, "acceptance_ratio": 0.5025, "accepted_count": 204.0, "drafted_count": 406.0, "drafts": 58.0, "pos0_accept": 54.0, "pos1_accept": 43.0, "pos2_accept": 32.0, "pos3_accept": 26.0, "pos4_accept": 21.0, "pos5_accept": 16.0, "pos6_accept": 12.0, "lm_head_topk_miss": 0.0, "lm_head_topk_hit_walk_miss": 0.0, "walk_hit_verify_reject": 0.0, "b_unary_would_hit": 0.0, "b_unary_also_miss": 0.0, "b_tgt_unary_rank0": 0.0, "b_tgt_unary_rank_le2": 0.0, "b_tgt_unary_rank_le7": 0.0, "b_tgt_edge_rank_sum": 0.0, "b_tgt_edge_rank_n": 0.0, "reject_at_pos": [0, 0, 0, 0, 0, 0, 0], "rejected_rounds": 0, "in_topk": 0.0, "not_in_topk": 0.0, "wall_s": 7.165, "completion_tokens": 256}
+{"request_id": 6, "acceptance_ratio": 0.7526, "accepted_count": 216.0, "drafted_count": 287.0, "drafts": 41.0, "pos0_accept": 41.0, "pos1_accept": 39.0, "pos2_accept": 33.0, "pos3_accept": 29.0, "pos4_accept": 27.0, "pos5_accept": 24.0, "pos6_accept": 23.0, "lm_head_topk_miss": 0.0, "lm_head_topk_hit_walk_miss": 0.0, "walk_hit_verify_reject": 0.0, "b_unary_would_hit": 0.0, "b_unary_also_miss": 0.0, "b_tgt_unary_rank0": 0.0, "b_tgt_unary_rank_le2": 0.0, "b_tgt_unary_rank_le7": 0.0, "b_tgt_edge_rank_sum": 0.0, "b_tgt_edge_rank_n": 0.0, "reject_at_pos": [0, 0, 0, 0, 0, 0, 0], "rejected_rounds": 0, "in_topk": 0.0, "not_in_topk": 0.0, "wall_s": 5.202, "completion_tokens": 256}
+{"request_id": 7, "acceptance_ratio": 0.4539, "accepted_count": 197.0, "drafted_count": 434.0, "drafts": 62.0, "pos0_accept": 49.0, "pos1_accept": 39.0, "pos2_accept": 33.0, "pos3_accept": 30.0, "pos4_accept": 19.0, "pos5_accept": 15.0, "pos6_accept": 12.0, "lm_head_topk_miss": 0.0, "lm_head_topk_hit_walk_miss": 0.0, "walk_hit_verify_reject": 0.0, "b_unary_would_hit": 0.0, "b_unary_also_miss": 0.0, "b_tgt_unary_rank0": 0.0, "b_tgt_unary_rank_le2": 0.0, "b_tgt_unary_rank_le7": 0.0, "b_tgt_edge_rank_sum": 0.0, "b_tgt_edge_rank_n": 0.0, "reject_at_pos": [0, 0, 0, 0, 0, 0, 0], "rejected_rounds": 0, "in_topk": 0.0, "not_in_topk": 0.0, "wall_s": 7.659, "completion_tokens": 256}
+{"request_id": 8, "acceptance_ratio": 0.2891, "accepted_count": 172.0, "drafted_count": 595.0, "drafts": 85.0, "pos0_accept": 60.0, "pos1_accept": 42.0, "pos2_accept": 27.0, "pos3_accept": 15.0, "pos4_accept": 14.0, "pos5_accept": 9.0, "pos6_accept": 5.0, "lm_head_topk_miss": 0.0, "lm_head_topk_hit_walk_miss": 0.0, "walk_hit_verify_reject": 0.0, "b_unary_would_hit": 0.0, "b_unary_also_miss": 0.0, "b_tgt_unary_rank0": 0.0, "b_tgt_unary_rank_le2": 0.0, "b_tgt_unary_rank_le7": 0.0, "b_tgt_edge_rank_sum": 0.0, "b_tgt_edge_rank_n": 0.0, "reject_at_pos": [0, 0, 0, 0, 0, 0, 0], "rejected_rounds": 0, "in_topk": 0.0, "not_in_topk": 0.0, "wall_s": 10.284, "completion_tokens": 256}
+{"request_id": 9, "acceptance_ratio": 0.558, "accepted_count": 207.0, "drafted_count": 371.0, "drafts": 53.0, "pos0_accept": 48.0, "pos1_accept": 41.0, "pos2_accept": 36.0, "pos3_accept": 31.0, "pos4_accept": 23.0, "pos5_accept": 17.0, "pos6_accept": 11.0, "lm_head_topk_miss": 0.0, "lm_head_topk_hit_walk_miss": 0.0, "walk_hit_verify_reject": 0.0, "b_unary_would_hit": 0.0, "b_unary_also_miss": 0.0, "b_tgt_unary_rank0": 0.0, "b_tgt_unary_rank_le2": 0.0, "b_tgt_unary_rank_le7": 0.0, "b_tgt_edge_rank_sum": 0.0, "b_tgt_edge_rank_n": 0.0, "reject_at_pos": [0, 0, 0, 0, 0, 0, 0], "rejected_rounds": 0, "in_topk": 0.0, "not_in_topk": 0.0, "wall_s": 6.596, "completion_tokens": 256}
+{
+  "summary": true,
+  "topk_definition": "lm_head_topk_hit uses compute_candidates() pool (DFLASH_SELECTOR_TOP_K), not a second edge-score top-k",
+  "runs": 10,
+  "acceptance_ratio": {
+    "n": 10,
+    "mean": 0.469,
+    "median": 0.4603,
+    "p10": 0.3657,
+    "p25": 0.3956,
+    "p75": 0.4953,
+    "p90": 0.5775,
+    "min": 0.2891,
+    "max": 0.7526
+  },
+  "mean_acceptance_by_position": [
+    0.825,
+    0.6645,
+    0.5217,
+    0.4045,
+    0.3178,
+    0.2279,
+    0.1798
+  ],
+  "first_reject_split": {
+    "rejected_rounds": 0,
+    "classified": 0.0,
+    "A_lm_head_topk_miss": 0.0,
+    "B_lm_head_topk_hit_walk_miss": 0.0,
+    "C_walk_hit_verify_reject": 0.0,
+    "A_pct": null,
+    "B_pct": null,
+    "C_pct": null
+  },
+  "B_walk_debug": {
+    "B1_unary_would_hit": 0.0,
+    "B2_unary_also_miss": 0.0,
+    "B1_pct_of_B": null,
+    "B2_pct_of_B": null,
+    "tgt_unary_rank0_pct": null,
+    "tgt_unary_rank_le2_pct": null,
+    "tgt_unary_rank_le7_pct": null,
+    "tgt_edge_rank_mean": null,
+    "reject_at_pos": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  "verdict_hint": "A high \u2192 try TOP_K 40/48; B1 high \u2192 unary argmax walk A/B (edge override); B2 high \u2192 target is not unary#1, raising TOP_K or dropping edges won't recover most rejects; C high \u2192 inspect verifier/sampling"
+}

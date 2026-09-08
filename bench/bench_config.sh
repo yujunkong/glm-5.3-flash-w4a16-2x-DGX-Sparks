@@ -61,7 +61,13 @@ done
 
 # 6. acceptance
 python3 acceptance_ratio.py "$BASE" > "$OUTDIR/acceptance.txt" 2>&1 || fail "acceptance missing"
-cat "$OUTDIR/acceptance.txt" | tail -n 8
+cat "$OUTDIR/acceptance.txt" | tail -n 20
+
+# 6b. per-request acceptance + first-reject A/B/C (TOP_K=32 measurement)
+echo "reject_split x10..."
+python3 bench_reject_split.py --base "$BASE" --runs 10 --max-tokens 256 \
+  --out "$OUTDIR/reject_split.json" > "$OUTDIR/reject_split.txt" 2>&1 || fail "reject_split failed"
+tail -n 40 "$OUTDIR/reject_split.txt"
 
 # 7. P1 determinism
 p1=$(curl -s "$BASE/v1/chat/completions" -H 'Content-Type: application/json' \

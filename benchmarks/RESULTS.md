@@ -15,6 +15,10 @@ with repetition as real.
 
 ## Validated final recipe (`benchmarks/final-recipe/`)
 
+Pre-overlay pin (checkpoint `selector_top_k=16`). Current production is the
+2026-09-08 overlay below (`TOP_K=32`, probe off): soak **34.7–35.5**, C6 **89.3**,
+accept **0.439**.
+
 `PORT=8000`, `MOE_BACKEND=marlin`, `MAX_NUM_SEQS=6`, `BLOCK_SIZE=2304`,
 `MAX_NUM_BATCHED_TOKENS=8192`, `DISABLE_FLASHINFER_AUTOTUNE=1`,
 `APPLY_APC_PATCH=1`, persistent caches, DFlash2 K=7. Gate 7/7, P1 correct
@@ -148,6 +152,13 @@ persisted on both nodes (`tilelang/0.1.12/...` + `cuda-binaries/*.cubin`).
 - `flashinfer_cutlass` as MoE: incompatible with W4A16 (boot ValueError).
 - PIECEWISE/FULL cudagraphs: NVFP4-lane A/B showed −8.7%/+4.3% (noise) with
   P1 divergence — we stay `enforce-eager`.
+- W4A16 `ENFORCE_EAGER=0` (FULL_AND_PIECEWISE, DFlash2 graphs captured):
+  soak 33.0 / C6 79.6 vs eager `selector-topk-32` 34.7 / 89.3 — graphs lose.
+- FlashInfer autotune ON: ~50s boot, **Saved 0 configs**, soak 33.2 / C6 79.0.
+- Adaptive `DFLASH_TOKENS`: DFlash2 has no confidence head; K=7 is tied to
+  conv `block_size=8`. Do not change.
+- KPool manager prefix-cache: `supports_fine_grained_hash_lookup=False` is
+  load-bearing (1-block circular scratch). APC overlay only.
 - `max_num_batched_tokens=16384`: loses on decode under load, prefill ties.
 - `max_num_seqs=12`: saturates at the same ~80 tok/s as C6 — stays 6 (preserves
   KV for long agent contexts).
@@ -155,3 +166,36 @@ persisted on both nodes (`tilelang/0.1.12/...` + `cuda-binaries/*.cubin`).
 - Unpinned KV (profiler at `gpu_memory_utilization=0.85`): only finds 6.96 GiB
   free < 7.05 GiB for 1x1M (`ValueError`, boot fails). The 9 GiB pin is
   *more* generous than the profiler and serves 1M stable — **keep pinned**.
+- `DFLASH_WALK_MODE=unary`: reject_split mean **0.460** vs edge **0.482** — lost.
+- `DFLASH_SELECTOR_TOP_K=48`: mean accept **0.479** vs 32's 0.482; A only 12%→9%.
+- `DFLASH2_ACC_PROBE=1` while serving: soak **32.1** vs probe-off **35.5** (`.cpu()` sync).
+- Live-temp rejection warmup (mutate sampler temp buffer): first-request
+  `_rejection_kernel` JIT still fired; soak 32.8 vs 35.5 — reverted.
+
+## Overlay A/B 2026-09-08 (no retrain, no image rebuild)
+
+Production overlay on the same image: `DFLASH_SELECTOR_TOP_K=32` (checkpoint
+still 16; `selector_rank` untouched), warmup bind-mount, APC as before.
+`ENFORCE_EAGER=1`, `DISABLE_FLASHINFER_AUTOTUNE=1`, `DFLASH2_ACC_PROBE=0`,
+`DFLASH_WALK_MODE=edge`.
+
+| config | soak C1 | C1 | C6 | acceptance |
+|---|---|---|---|---|
+| final-recipe (top_k=16, eager) | 31.8 | ~30.4 | 81.1 | 0.418 |
+| **selector-topk-32 (keep)** | **34.7** | **35.4** | **89.3** | **0.439** |
+| tps-probe-on | 32.1 | 32.2 | 84.7 | 0.435 |
+| **tps-probe-off (keep)** | **35.5** | 32.3 | 78.9 | 0.433 |
+| flashinfer-autotune-on | 33.2 | 29.0 | 79.0 | 0.400 |
+| enforce-eager-0 (CUDA graphs) | 33.0 | 32.6 | 79.6 | 0.433 |
+| tps-warmup-live-temp (discard) | 32.8 | 34.3 | 81.2 | 0.422 |
+| **tps-mhc-warmup (keep)** | 30.1 | 31.1 | 76.8 | 0.390 |
+
+C6 on later boots sits in a wide band (~79–89); treat only soak gains ≳5%
+as real. Probe-off is kept because soak recovered +10% vs probe-on and
+matches the selector-topk-32 C1 soak. Decode is SM-bound (~94% util); further
+tiny-kernel patches were not applied.
+
+`mhc_pre_big_fuse_with_norm_tilelang` runtime JIT: TP0+TP1 at C2 before
+(`tps-probe-off` / `tps-warmup-live-temp`). After GLM mHC warmup overlay
+(`benchmarks/tps-mhc-warmup/`): **0** TileLang inference JIT. First-request
+TTFT is still rejection-sampler Triton JIT, not this kernel.

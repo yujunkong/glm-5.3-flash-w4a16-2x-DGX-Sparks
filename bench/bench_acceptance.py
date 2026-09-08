@@ -36,6 +36,7 @@ import urllib.request
 API = "http://127.0.0.1:8000"
 MODEL = "glm-5.3-flash"
 PROBE_FILE = "/tmp/dflash2-acc-state.json"
+PROBE_FILE_CACHE = "/cache/dflash2-acc-state.json"
 
 # Real, diverse Python source (vLLM's own v1 tree, read from the container)
 # is used as the prompt corpus so acceptance is NOT inflated by repetition.
@@ -263,11 +264,13 @@ def get_metrics(api: str) -> dict:
 
 
 def read_probe(path: str) -> dict | None:
-    try:
-        with open(path) as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return None
+    for candidate in (path, PROBE_FILE_CACHE, "/tmp/dflash2-acc-state.json"):
+        try:
+            with open(candidate) as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            continue
+    return None
 
 
 def complete(api: str, model: str, prompt_ids: list[int], max_tokens: int):

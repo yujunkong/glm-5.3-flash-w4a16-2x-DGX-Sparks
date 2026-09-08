@@ -1,199 +1,82 @@
-# GLM-5.3-Flash W4A16 + DFlash2 on 2× DGX Spark (GB10 / SM121)
+# GLM-5.3-Flash W4A16 + DFlash2 (2× DGX Spark)
 
-> ⚠️ **Work in progress.** Validated on a single 2× DGX Spark kit. Not
-> production-hardened. SM121 image, top-k fix, and fabric notes come from
-> [**tonyd2wild**](https://github.com/tonyd2wild); sparse-MLA / prefix-cache
-> groundwork from
-> [**MiaAI-Lab**](https://github.com/MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks).
-> Full credits at the bottom.
+2× NVIDIA DGX Spark (GB10 / SM121), TP=2에서 GLM-5.3-Flash를 W4A16 + DFlash2로 서빙하는 레시피. 이미지·가중치는 그대로 두고, 컨테이너에 overlay만 bind-mount 한다.
 
-OpenAI-compatible serving of **GLM-5.3-Flash** as
-**W4A16 INT4 + BF16 MTP**
-([`canada-quant/glm-5.3-w4a16-mtp`](https://huggingface.co/canada-quant/glm-5.3-w4a16-mtp),
-base [`zai-org/GLM-5.3-Flash`](https://huggingface.co/zai-org/GLM-5.3-Flash))
-on **two NVIDIA DGX Spark (GB10, SM121)** at TP=2, with
-[`incoai/GLM-5.3-Flash-DFlash2`](https://huggingface.co/incoai/GLM-5.3-Flash-DFlash2),
-**fp8 KV cache**, and up to **1M context**.
+## 배경
 
-On our kit this is the fastest GLM-5.3-Flash Spark recipe we measured — see
-[benchmarks/RESULTS.md](benchmarks/RESULTS.md).
+- 모델: [`zai-org/GLM-5.3-Flash`](https://huggingface.co/zai-org/GLM-5.3-Flash)
+- 양자화: [`canada-quant/glm-5.3-w4a16-mtp`](https://huggingface.co/canada-quant/glm-5.3-w4a16-mtp) (약 178 GiB, 라우팅 MoE만 INT4)
+- 드래프터: [`incoai/GLM-5.3-Flash-DFlash2`](https://huggingface.co/incoai/GLM-5.3-Flash-DFlash2), `K=7` 고정
+- 이미지: `radixark/vllm-glm53-flash:sm121-v11-dflash2` (alias `ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v11-dflash2`)
+- KV: `fp8_e4m3` 9 GiB pin, `max_model_len=1M`, Marlin, `--enforce-eager`
 
-## Why this quant
+스톡 vLLM은 이 W4A16 체크포인트를 그대로 못 올린다 (`gate_up_proj.weight` KeyError). DFlash2 checkpoint `selector_top_k=16`은 후보 풀이 좁고, 계측 프로브와 mHC TileLang은 첫 C2에서 JIT가 난다.
 
-| | BF16 | This recipe (W4A16) |
-|---|---|---|
-| Weights | ~599 GiB | **177.7 GiB (−70%)** |
-| Serves 1M context on | 8× 80 GB | **2× DGX Spark** (also 4× H100/H200, 4× RTX PRO 6000) |
-| MoE GEMMs | BF16 | INT4 group-128 GPTQ (36,288 routed-expert GEMMs only) |
-| Quality-sensitive parts | — | stay BF16: attention, router/gate, shared experts, dense layers 0–2, embeddings, `lm_head`, norms, vision tower, MTP |
+## 패치 (이 레포 overlay)
 
-Single-stream is a tie (~30 tok/s, acceptance ~0.41). W4A16 wins on concurrency:
-**C4 69.2 / C6 81.1 tok/s** vs ~42/51 (NVFP4) and ~44/48 (EXL3). Details:
-[benchmarks/COMPARISON.md](benchmarks/COMPARISON.md).
+`./launch-glm53-w4a16-tp2-dflash2.sh`가 아래 파일을 컨테이너에 마운트한다. 이미지·가중치는 수정하지 않는다.
 
-Quality (checkpoint card): AIME 2026 **85.0%** (102/120), GSM8K **0.97**,
-GPQA **0.8586**.
-
-## Final recipe performance
-
-Validated config: `MOE_BACKEND=marlin`, `MAX_NUM_SEQS=6`, `BLOCK_SIZE=2304`,
-`MAX_NUM_BATCHED_TOKENS=8192`, DFlash2 `K=7`, KV `fp8_e4m3` pinned at 9 GiB,
-`--enforce-eager` ([`benchmarks/final-recipe/`](benchmarks/final-recipe/)):
-
-| Metric | Value |
+| 파일 | 역할 |
 |---|---|
-| Soak C1 streaming median (3× 512 tok) | **31.8 tok/s**, TTFT 0.35 s |
-| `bench_c` C1 / C2 / C4 / C6 aggregate | ~30.4 / ~44.4 / 69.2 / **81.1 tok/s** |
-| DFlash2 acceptance (`/metrics`) | 0.418 |
-| Cold boot | ~8 min (`init engine` 87 s, 0 TileLang recompiles) |
-| Cold prefill | ~1.3–1.6k tok/s flat up to 300K, no OOM single-stream |
+| [`patches/glm5next_model.py`](patches/glm5next_model.py) | W4A16 dense MLP 로드. `quant_config=None` + `gate_proj`/`up_proj` → `gate_up_proj` |
+| [`patches/qwen3_dflash2.py`](patches/qwen3_dflash2.py) | `DFLASH_SELECTOR_TOP_K`로 lm_head 후보 풀만 변경. `selector_rank=256`은 학습 차원 → 고정 |
+| [`patches/dflash2_speculator.py`](patches/dflash2_speculator.py) | walk (`DFLASH_WALK_MODE=edge`). 승인율 프로브는 `DFLASH2_ACC_PROBE=0`이면 꺼짐 |
+| [`patches/spec_decode_rejection_warmup.py`](patches/spec_decode_rejection_warmup.py) | DFlash `prepare_dflash_inputs` / `_copy_page_indices` 부팅 시 compile |
+| [`patches/deepseek_v4_mhc_warmup.py`](patches/deepseek_v4_mhc_warmup.py) | GLM mHC TileLang warmup. 스톡은 DSv4만 워밍해서 C2에서 `mhc_pre_big_fuse_with_norm_tilelang` JIT |
+| [`docs/patch_hybrid_prefix_hit.py`](docs/patch_hybrid_prefix_hit.py) | 하이브리드 prefix-cache (APC). 드래프터 SWA가 hit를 0으로 만드는 것 수정. `APPLY_APC_PATCH=1` |
+| [`patches/sparse_attn_indexer_kpool.py`](patches/sparse_attn_indexer_kpool.py) | SM121 kpool indexer (Tony). `GLM53_SM121_MLA=0`일 때 |
+| [`patches/chat_template_mm.jinja`](patches/chat_template_mm.jinja) | 비전 chat template |
 
-## Patches (this repo)
+**유지 설정:** `DFLASH_SELECTOR_TOP_K=32`, `DFLASH_WALK_MODE=edge`, `DFLASH2_ACC_PROBE=0`, `DFLASH_TOKENS=7`, `ENFORCE_EAGER=1`, FlashInfer autotune OFF, APC ON.
 
-Stock vLLM in the Spark image does not load this W4A16 checkpoint as-is.
-`./launch-glm53-w4a16-tp2-dflash2.sh` bind-mounts the files below into the
-container. Do not edit the Docker image or the weights.
+**벤치 후 버린 것:** FlashInfer autotune ON, CUDA graphs (`ENFORCE_EAGER=0`), `WALK_MODE=unary`, `TOP_K=48`, 서빙 중 승인율 프로브 ON, live-temp rejection warmup, SM121 MLA overlay.
 
-| Patch | Mounted as | What it does |
-|---|---|---|
-| [`patches/glm5next_model.py`](patches/glm5next_model.py) | `vllm/models/glm5next/nvidia/model.py` | **W4A16 weight-load fix.** Checkpoint keep-BF16 MLP is stored as `gate_proj` / `up_proj`. vLLM fuses them to `gate_up_proj` and then applies compressed-tensors, so `params_dict` has no `.weight` and boot dies with `KeyError: 'layers.0.mlp.gate_up_proj.weight'`. Fix: `quant_config=None` on dense layers 0–2 and shared experts; `packed_modules_mapping` for `gate_up_proj → [gate_proj, up_proj]`; stacked load `gate_proj`/`up_proj` → `layers.N.mlp.gate_up_proj.weight` (confirmed on DGX: that key exists after the quant skip). |
-| [`patches/sparse_attn_indexer_kpool.py`](patches/sparse_attn_indexer_kpool.py) | `vllm/model_executor/layers/sparse_attn_indexer_kpool.py` | SM121 persistent top-k / kpool indexer (Tony). Skipped when `GLM53_SM121_MLA=1` because the SM120 overlay generates its own indexer. |
-| [`patches/chat_template_mm.jinja`](patches/chat_template_mm.jinja) | copied next to the weights | Vision chat template (not on the HF repo). |
-| [`docs/patch_hybrid_prefix_hit.py`](docs/patch_hybrid_prefix_hit.py) | generated `kv_cache_coordinator.py` | Hybrid prefix-cache: stock vLLM lets the drafter SWA group zero APC hits. Default on (`APPLY_APC_PATCH=1`). Fail-closed — if anchors drift, boot continues stock. |
-| [`docs/patch_sm121_mla.py`](docs/patch_sm121_mla.py) | 6-file overlay when `GLM53_SM121_MLA=1` | NoPE sparse MLA on SM120 kernels (512 → 576 zero-pad). Also reapplies the W4A16 dense-MLP `quant_config=None` / `packed_modules_mapping` fix on the generated `model.py`. Default **off**. |
+## 벤치 결과
 
-DGX check (Worker_TP0) after the W4A16 model patch:
+키트: 2× DGX Spark, TP=2, `temperature=0`, 첫 요청(부팅 warmup)은 soak에 넣지 않음. 부트 간 분산 약 ±15%. 원자료 [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md).
 
-```
-params_dict layer 0 MLP:
-  layers.0.mlp.gate_up_proj.weight
-  layers.0.mlp.down_proj.weight
+| 구성 | soak C1 | C1 | C6 | accept (`/metrics`) |
+|---|---|---|---|---|
+| top_k=16 (`final-recipe`) | 31.8 | ~30.4 | 81.1 | 0.418 |
+| **top_k=32 + probe off (채택)** | **34.7–35.5** | **35.4** | **89.3** | **0.433–0.439** |
+| probe ON | 32.1 | 32.2 | 84.7 | 0.435 |
+| autotune ON / CUDA graphs | 33.2 / 33.0 | — | 79.0 / 79.6 | — |
 
-checkpoint:
-  model.language_model.layers.0.mlp.gate_proj.weight
-  model.language_model.layers.0.mlp.up_proj.weight
-```
+- reject_split mean (temp=0, edge+32): 약 **0.48**. 0.535는 미도달 추정치라 게이트로 쓰지 않음.
+- mHC warmup 후: `mhc_pre_big_fuse_with_norm_tilelang` **runtime JIT 0** (TP0·TP1). 첫 요청 `_rejection_kernel` Triton JIT는 남음.
+- 콜드 프리필: ~1.3–1.6k tok/s, 300K까지 단일 스트림 OOM 없음. 콜드 부트 ~8분.
 
-`GLM53_SM121_MLA=0` (default) mounts `patches/glm5next_model.py`.
-`=1` generates `model.py` via `docs/patch_sm121_mla.py` and applies the same
-quant skip there so the KeyError does not return.
+## 적용
 
-## What's in this repo
-
-| File | Role |
-|---|---|
-| `launch-glm53-w4a16-tp2-dflash2.sh` | TP=2 launcher, rank `0\|1` (mounts patches, DFlash2) |
-| `start.sh` | 2-node orchestrator: pull → download → rsync → launch → health |
-| `stop.sh` / `status.sh` | thin wrappers over `start.sh` |
-| `download.sh` | weights (~178 GiB) + drafter (~2.3 GiB) from HF |
-| `validate.sh` | pre-boot gates: shards, drafter, image, GIDs, swappiness, disk |
-| `docker-compose.yml` | optional head/worker compose path |
-| `.env.example` | knobs (copy to `.env`, set IPs/paths) |
-| `PARAMS.md` | verbatim HF checkpoint parameters |
-| `clocks.sh` | lock GB10 clocks at 2400 MHz (hooked from `start.sh`) |
-| `patches/` | runtime bind-mounts (model loader, kpool, chat template) |
-| `docs/` | APC / SM121 overlay generators + investigation notes |
-| `bench/` | decode / concurrency / prefill / prefix / acceptance probes |
-| `benchmarks/` | `RESULTS.md`, `COMPARISON.md`, `final-recipe/` |
-
-## Performance tuning
-
-A/B on our pair (`benchmarks/perf-exp/EXP-LOG.md`):
-
-- **GB10 clocks 2400 MHz** (`./clocks.sh`): +5–7% decode, +2–3% prefill. Reset: `./clocks.sh reset`.
-- **`--async-scheduling`**: +2–3% decode. Default off.
-- **Micro opts** (`VLLM_MARLIN_USE_ATOMIC_ADD=1`, `VLLM_USE_FUSED_MOE_GROUPED_TOPK=1`): ~0, harmless.
-- Combined: **~+8–11% decode C1, +3% C6, +2% prefill**.
-- **Do not use**: `--enable-expert-parallel`, cudagraphs under load, draft with bf16 KV, block sizes 1152/4608, chunks ≠ 8192.
-
-## Requirements
-
-- 2× DGX Spark (GB10, 128 GiB UMA) with CX7 RoCE
-- Docker + GPU on both nodes, passwordless SSH head → worker
-- ~190 GiB free in `/var/tmp` on both nodes
-- `huggingface-cli` (or `hf`) for download
-- `vm.swappiness=10` (or 0) — `validate.sh` / `start.sh` check this
-
-## Quickstart
+필요: 2× DGX Spark, Docker+GPU, head→worker SSH, `/var/tmp` 약 190 GiB.
 
 ```bash
-git clone <this-repo> && cd glm-5.3-flash-w4a16-2x-DGX-Sparks
-cp .env.example .env   # set HEAD_IP / WORKER_IP / SSH
-
+cp .env.example .env   # HEAD_IP / WORKER_IP
 ./validate.sh
-./download.sh          # ~178 GiB weights + ~2.3 GiB drafter
-./start.sh             # pull, rsync, launch TP=2, poll /health
-# ./start.sh restart | stop | status | logs [worker]
+./download.sh          # 가중치 ~178 GiB + drafter ~2.3 GiB
+./start.sh             # pull, rsync, TP=2 launch, /health
+# SKIP_PULL=1 ./start.sh restart
 ```
 
-Manual path — **worker first**:
+워커 먼저 수동 기동:
 
 ```bash
 ./launch-glm53-w4a16-tp2-dflash2.sh 1
 sleep 25
 ./launch-glm53-w4a16-tp2-dflash2.sh 0
-
-until curl -sf http://<HEAD_IP>:8000/health >/dev/null; do sleep 20; done
 ```
 
-Smoke test:
+엔드포인트 `http://<HEAD_IP>:8000`. 로그에 `glm5next_model.py mounted`가 있어야 한다. 없으면 shard 0에서 KeyError.
 
-```bash
-curl http://<HEAD_IP>:8000/v1/chat/completions -H 'Content-Type: application/json' -d '{
-  "model": "glm-5.3-flash",
-  "messages": [{"role": "user", "content": "Prove there are infinitely many primes."}],
-  "max_tokens": 128,
-  "chat_template_kwargs": {"enable_thinking": false}
-}'
-```
+## 라이선스
 
-Look for `[patch] glm5next_model.py mounted (W4A16 gate_up_proj load fix)` in
-the launch log. Without that mount, Worker_TP0 dies on shard 0 with
-`KeyError: 'layers.0.mlp.gate_up_proj.weight'`.
+이 레시피 코드는 MIT ([LICENSE](LICENSE)). 가중치·드래프터·이미지는 각 Hub/이미지 라이선스를 따른다. Zhipu AI, NVIDIA, upstream과 무관.
 
-## Configuration reference
+## 출처
 
-Image: `radixark/vllm-glm53-flash:sm121-v11-dflash2`
-(alias `ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v11-dflash2`).
-
-| Env | 1M (full) | 262K (staging) |
-|---|---|---|
-| `MAX_MODEL_LEN` | 1048576 | 262144 |
-| `KV_CACHE_MEMORY` | 9663676416 (9 GiB) | 3221225472 (3 GiB) |
-| `--max-num-seqs` | 6 | 6 |
-| `--block-size` | 2304 | 2304 |
-| `--kv-cache-dtype` | fp8_e4m3 | fp8_e4m3 |
-| `--speculative-config` | DFlash2, `num_speculative_tokens=7` | same |
-| `--enforce-eager` | 1 | 1 |
-| `--gpu-memory-utilization` | 0.85 | 0.85 |
-
-Boot notes:
-
-- DFlash2 needs **exactly 7** speculative tokens.
-- MoE backend must be **`marlin`** (or auto). `flashinfer_cutlass` is NVFP4-only.
-- **fp8 KV is required** on Spark.
-- Keep the **9 GiB KV pin** for 1M context.
-- Poll **`/health`**, not `/v1/models`.
-- GB10 ritual each boot: `sync; echo 3 | sudo tee /proc/sys/vm/drop_caches`.
-- Single prompts ≲ ~310K tokens in our tests.
-
-## Experimental: SM120 sparse-MLA overlay
-
-`GLM53_SM121_MLA=1` enables `FLASHINFER_MLA_SPARSE_SM120` (NoPE 512 → 576-wide
-kernel via zero-pad). `=0` is the SM90 baseline. A/B (2026-09-03): decode
-parity, **−21% KV pool** — keep `=0`. Runbook:
-[`docs/sm121-mla-investigation.md`](docs/sm121-mla-investigation.md).
-
-## Credits
-
-- [**zai-org/GLM-5.3-Flash**](https://huggingface.co/zai-org/GLM-5.3-Flash) — base model.
-- [**canada-quant/glm-5.3-w4a16-mtp**](https://huggingface.co/canada-quant/glm-5.3-w4a16-mtp) — W4A16 quant.
-- [**tonyd2wild**](https://github.com/tonyd2wild) — SM121 image, kpool top-k, `chat_template_mm.jinja`, fabric notes.
-- [**incoai/GLM-5.3-Flash-DFlash2**](https://huggingface.co/incoai/GLM-5.3-Flash-DFlash2) — drafter.
-- [**MiaAI-Lab**](https://github.com/MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks) — SM120 MLA + hybrid APC ports.
-- **vLLM** and **FlashInfer**.
-
-## License
-
-Recipe: MIT — see [LICENSE](LICENSE). Weights, drafter, and images keep their
-own licenses. Not affiliated with Zhipu AI, NVIDIA, or upstream projects.
+- [`zai-org/GLM-5.3-Flash`](https://huggingface.co/zai-org/GLM-5.3-Flash) — 베이스 모델
+- [`canada-quant/glm-5.3-w4a16-mtp`](https://huggingface.co/canada-quant/glm-5.3-w4a16-mtp) — W4A16
+- [`incoai/GLM-5.3-Flash-DFlash2`](https://huggingface.co/incoai/GLM-5.3-Flash-DFlash2) — DFlash2 드래프터
+- [tonyd2wild](https://github.com/tonyd2wild) — SM121 이미지, kpool, chat template, fabric
+- [MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks](https://github.com/MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks) — APC / SM121 MLA 조사
+- vLLM, FlashInfer
