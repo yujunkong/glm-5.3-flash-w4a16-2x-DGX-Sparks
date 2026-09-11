@@ -1,0 +1,22 @@
+==PROF== Connected to process 20 (/usr/bin/python3.12)
+==PROF== Profiling "Kernel2": 0%....50%....100% - 9 passes
+==PROF== Disconnected from process 20
+[20] python3.12@127.0.0.1
+  void Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_16x16_128x1_tn_align8>(Params) (8, 96, 1)x(32, 1, 1), Context 1, Stream 7, Device 0, CC 12.1
+    Section: Memory Workload Analysis
+    -------------------------------------- ----------- ------------
+    Metric Name                            Metric Unit Metric Value
+    -------------------------------------- ----------- ------------
+    Local Memory Spilling Requests                                0
+    Local Memory Spilling Request Overhead           %      no data
+    Mem Busy                                         %        14.33
+    Max Bandwidth                                    %        14.32
+    L1/TEX Hit Rate                                  %        13.47
+    L2 Persisting Size                           Mbyte         4.72
+    L2 Compression Success Rate                      %            0
+    L2 Compression Ratio                                          0
+    L2 Compression Input Sectors                sector            0
+    L2 Hit Rate                                      %        22.66
+    Mem Pipes Busy                                   %         9.92
+    -------------------------------------- ----------- ------------
+

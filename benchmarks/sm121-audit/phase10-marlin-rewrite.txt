@@ -1,0 +1,52 @@
+# PHASE 10 — Marlin launch/tile rewrite attempt
+# 2026-09-10. Stock image. No production .env / soak / _moe rebuild.
+# Live nsys: phase7-live-blobs.sqlite
+# Microbench: probe_marlin_rewrite.py, probe_marlin_w4a8.py
+
+## Live Marlin (TP=2 decode, same capture as 128x1)
+
+CUDA 41.70%  (786 launches, one template)
+grid **144 x 1 x 1**  block 128  regs 94  dyn smem 32 KB  (all launches)
+
+| pctCUDA | n | avg us | Python | op | M | N | K | E_local |
+|--------:|--:|-------:|--------|----|--:|--:|--:|--------:|
+| 26.53 | 393 | 819 | marlin_moe.py:135 | w1 gate_up `moe_wna16_marlin_gemm` | 8 | 2048 | 4096 | 144 |
+| 15.17 | 393 | 468 | marlin_moe.py:202 | w2 down `moe_wna16_marlin_gemm` | 64 | 4096 | 1024 | 144 |
+
+Template (demangled): threads=128, thread_n=128, thread_k=64, block_m=8, stages=4, group=128 (group_blocks=8), U4B8, no zp.
+144 CTAs = 1 per local expert (288/TP2). topk=8, M=8 → most CTAs idle.
+Occupancy: 3 blocks/SM, 384 threads/SM on 48 SMs.
+Correction (probe_marlin_bw_unique.py): moe_align emits **one block per unique expert only** (~49–57), not 144 empty CTAs. Live grid 144 is persistent CTAs (`sms * blocks_per_sm`), not expert count.
+
+w1 W4 = 4.19 MB/expert. 49 uniq × 4.19 = 205 MB / live 819 µs ≈ **251 GB/s (92% of 273)**.
+w2 = 2.10 MB/expert. 54 uniq × 2.10 / 468 µs ≈ **242 GB/s (89%)**.
+
+Marlin is already LPDDR-bound. Launch knobs ±2% matches that. Not 98 GB/s; that used the wrong grid meaning.
+
+## Compiled-kernel sweep (same fused_marlin_moe, no new cubin)
+
+BASE fused_marlin_moe **1558 µs** (align + w1 + silu + w2 + sum).
+
+| cfg | us | vs base |
+|---|---:|---:|
+| atomic=1 | 1581 | +1.5% |
+| fp32_reduce=0 | 1553 | −0.4% |
+| tk=128,tn=128 (256-thread kernel) | 1573 | +0.9% |
+| tk=64,tn=128 (live default) | 1599 | +2.6% |
+| tk=128,tn=64 | 1547 | −0.7% |
+| tk=128,tn=128,atomic | 1541 | −1.1% |
+| blocks_per_sm=2/4 | 1558 / 1591 | 0 / +2% |
+
+BEST −1.1% (noise). **NO_KEEP.**
+
+The 256-thread kernel **is compiled** for this dtype/group. It is not faster on GB10.
+`VLLM_MARLIN_USE_ATOMIC_ADD` does not apply to MoE (`use_atomic_add=False` hardcoded); forcing it did not help.
+W4A8-FP8 needs a live vLLM config context (QuantFP8). Not soaked. Triton `MOE_BACKEND=triton` already MEASURED_DISCARD (−46%).
+
+## Rewrite that was not done
+
+A faster-than-DRAM kernel is not available: w1/w2 are already ~90% of 273 GB/s. Remaining ~8–12% on the Marlin op is ~3–5% CUDA ≈ +1 tok/s, below keep bar. Do not write a new W4 kernel for this.
+
+## Production
+
+Unchanged. No soak. No revert.

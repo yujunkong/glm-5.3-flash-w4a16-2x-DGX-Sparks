@@ -1,0 +1,68 @@
+# PHASE 7 — unidentified cutlass_80 128x2 (~20.5% CUDA)
+# 2026-09-10. Isolated nsys + F.linear sweep. No production boot, no rebuild.
+# Image radixark/vllm-glm53-flash:sm121-v11-dflash2 GPU0
+# Scripts: probe_128x2_identify.py, probe_linear_kernel_split.py
+# CSV: phase7-128x2-sweep.csv
+# nsys: Kernel2 cutlass_80_wmma 16x16_128x2  avg 311.7 us (inside.nsys-rep)
+
+DO NOT MODIFY PRODUCTION.
+KDA in_proj optimization NOT started (priority 2, after this ID).
+
+## What the ~288 us 128x2 kernel is (measured)
+
+One F.linear, one kernel (no split of fused N=12480).
+
+kernel     cutlass_80_wmma bf16 16x16_128x2_tn_align8
+module     F.linear / eager cuBLASLt  (same family as phase 6)
+M          8
+N          8192
+K          4096
+dtype      bf16
+weight     8192*4096*2 = 67.109 MB
+us         310.4 (microbench) / 311.7 (nsys avg, 5 launches)
+DRAM       217 GB/s  (LPDDR-bound; AI 7.98 FLOP/byte; TFLOPS ~2.1)
+calls/step NOT measured on live decode
+
+Fused KDA in_proj (N=12480) is a DIFFERENT kernel: 128x1 ~400 us, 1 launch.
+
+## Checkpoint tensors with this exact (N,K)
+
+Only: layers.{kda}.self_attn.{q,k,v}_proj.weight  (8192, 4096) x34 each.
+MLA q_b full unsharded (16384, 1536) is also 128x2 but 183 us, not 288.
+
+## Call site (what is proven vs not)
+
+Proven:
+  Python op = torch.nn.functional.linear
+  CUDA = libcublasLt cutlass_80_wmma 128x2
+  Not Marlin, not FlashInfer, not NCCL, not vLLM _C
+
+NOT proven (no TP=2 decode stack):
+  Which Python method (q_proj vs k_proj vs v_proj vs a loader bug)
+  Why N=8192 if fused in_proj_qkvbfg_a (N=12480, TP-sharded) is what KDA.forward calls
+  Why ~42 launches/step (sparse-layer count) vs 34 KDA or 102 (q+k+v)
+
+Hypothesis only (do not patch on this):
+  31 sparse-KDA * one unfused (8192,4096) @310us
+  + 11 MLA q_b unsharded (16384,1536) @183us
+  = 42 launches, mean 276 us ~ production 288 us.
+  Dense KDA 0-2 would stay on fused 128x1 already in phase 6.
+
+## Live decode nsys/hook
+
+Not run. Needs 2-node 180G boot + F.linear sitecustomize or nsys
+--python-backtrace on the serve PID. Isolated nsys cannot see vLLM stacks.
+
+## P1 implication
+
+This 128x2, if it really is 42*310us*134 / 15.96s:
+  42*310.4e-6*134 / 15.964 = 11.0% CUDA
+  Plus already-counted fused in_proj 11.4% would be double-counting IF they
+  are the same module. They are different (N,K). If both run, KDA attn
+  projections dominate even more. If only one runs, residual is this OR fused.
+
+Do not change cuBLASLt / fuse / quant until live stacks confirm.
+
+## Not touched
+
+FlashInfer, Marlin, NCCL, _C SM121, KDA in_proj code, .env, IMAGE.

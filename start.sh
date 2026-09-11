@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# start.sh — 2x DGX Spark orchestrator for canada-quant/glm-5.3-w4a16-mtp
-# 1) preflight 2) pull image on both nodes 3) HF download if missing 4) rsync worker 5) launch TP=2 6) health poll
+# start.sh — 2x DGX Spark orchestrator (GOLDEN FINAL: canada-quant/glm-5.3-w4a16-mtp)
+# 1) preflight 2) pull 3) download if missing 4) rsync worker 5) launch TP=2 with KEEP overlays 6) health
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 ENV_FILE="${ENV_FILE:-.env}"  # ENV_FILE=.env.base for baseline A/B boots
@@ -59,6 +59,15 @@ stop_conflicting() {
 cmd="${1:-start}"
 case "$cmd" in
   start|restart)
+    # Production freeze: default .env is canada-quant + KEEP overlays via launch-*.sh.
+    if [ "$ENV_FILE" = ".env" ] && [ "${MODEL:-}" != "canada-quant/glm-5.3-w4a16-mtp" ]; then
+      echo "[warn] $ENV_FILE MODEL=${MODEL:-empty} — freeze is canada-quant/glm-5.3-w4a16-mtp" >&2
+    fi
+    # kpool: empty or missing path → in-repo overlay (do not require $HOME/patches).
+    if [ -z "${PATCH_KPOOL_HOST:-}" ] || [ ! -f "${PATCH_KPOOL_HOST}" ]; then
+      PATCH_KPOOL_HOST="$SCRIPT_DIR/patches/sparse_attn_indexer_kpool.py"
+    fi
+    echo "[final] MODEL=${MODEL:-?} IMAGE=${IMAGE:-?} TOP_K=${DFLASH_SELECTOR_TOP_K:-} APC=${APPLY_APC_PATCH:-1} kpool=$PATCH_KPOOL_HOST"
     if [ "$cmd" = "restart" ]; then
       stop_conflicting
       sleep 2

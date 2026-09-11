@@ -1,0 +1,64 @@
+# PHASE 9 — apply/skip decisions for A/B-tier BF16 GEMMs
+# 2026-09-10. Stock image sm121-v11-dflash2. No production .env / soak / rebuild.
+# Scripts: probe_live_shape_bw.py, probe_live_kernel_cold.py
+# Live shapes from P7 nsys Python-BT (128x1 + 128x2).
+
+DO NOT MODIFY PRODUCTION unless a measured e2e win exists.
+Isolated same-weight reuse is L2-hot and is not live.
+
+## Workspace heuristic A/B (CUBLAS_WORKSPACE_CONFIG)
+
+| shape | default us | :4096:8 | :8192:16 |
+|---|---:|---:|---:|
+| KDA in_proj 8x12576x4096 | 448.4 | 441.9 | 444.5 |
+| KDA o_proj 8x4096x4096 | 128.5 | 139.9 (worse) | 124.0 |
+| shared_gate_up 8x2048x4096 | 26.8 | 21.0 | 26.8 |
+| MLA o_proj 8x4096x8192 | 283.8 | 293.6 (worse) | 285.8 |
+| lm_head 8x77440x4096 | 2702 | 2713 | 2697 |
+
+No config beats default on the DRAM-bound ops that matter. Do not set CUBLAS_WORKSPACE_CONFIG.
+
+cuBLASLt Python bindings are not in the image. Prior probe (cublaslt-probe.txt):
+heuristic always algoId=21 TILE_16x16 workspace=0. Live kernel names match that family
+(in_proj = 16x16_128x1, shared/lm_head = 16x16_128x2).
+
+## Work 2 — KDA in_proj_qkvbfg_a (A, 10.75% CUDA)
+
+Live: M=8 N≈12576 K=4096, grid 8x99x1, 456 us, kda.py:327 ColumnParallel F.linear.
+Layout: F.linear TN (kernel `tn_align8`), weight (N,K) bf16, no extra transpose.
+Isolated: 440–454 us, 227–234 GB/s (83–86% of 273). DRAM roof 377 us.
+Ceiling if at roof: (456-377)/456 * 10.75% ≈ **1.9% CUDA** ≈ **< +2.5% soak keep bar**.
+Workspace did not select a faster algo. Fusion/qkv split/TP/approximation forbidden.
+
+**Decision: SKIP. No code/env change.**
+
+## Work 3 — shared_experts.gate_up_proj (A, 6.03% CUDA)
+
+Live: 351 launches, avg 209 us, grid 8x16x1, N_est=2048, 16x16_128x2.
+Config: n_shared_experts=1, moe_intermediate=2048, TP=2 fused N=2048, bf16.
+Isolated SAME kernel (128x2):
+  hot (L2 reuse)  34 us  ~500 GB/s  — not live (42 distinct 16.8 MB weights, L2=24 MB)
+  cold (42 W)     78 us  ~216 GB/s  (79% of DRAM roof 61 us)
+Live 209 us vs isolated-cold 78 us is concurrent traffic (Marlin ~42% CUDA), not a
+wrong algo. Closing that gap requires parking Marlin (forbidden) or a new kernel
+that uses less DRAM under contention — not available without _C rebuild (forbidden).
+Realistic ceiling vs DRAM roof: 6.03*(1-61/209) ≈ 4.3% CUDA ≈ +1.5 tok/s, below keep bar.
+Workspace :4096:8 only helps L2-hot isolated (26→21 us), not live.
+
+**Decision: SKIP. Kernel name 128x2 is not a reason to swap.**
+
+## Work 4 — lm_head (B, 3.61% CUDA)
+
+Live: 17 launches, 2580 us, grid 8x605x1, N_est=77440 = vocab/TP2.
+Isolated: 2727 us, weight 634 MB, 233 GB/s (85% of 273). DRAM roof 2324 us.
+Ceiling ~0.5% CUDA. Vocab GEMM is a weight-read, not a tile bug.
+
+**Decision: SKIP.**
+
+## Work 5 — soak A/B
+
+No challenger applied → no soak, no revert.
+
+## Work 6 — config sweep
+
+Kernel/code path produced no keep-worthy change. Do not re-sweep MEASURED_KEEP knobs.

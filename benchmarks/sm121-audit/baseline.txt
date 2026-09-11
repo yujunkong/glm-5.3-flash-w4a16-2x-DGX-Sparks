@@ -1,0 +1,53 @@
+=== SM121 audit  image=radixark/vllm-glm53-flash:sm121-v11-dflash2  2026-09-09T19:56:10+09:00 ===
+
+=== versions ===
+python 3.12.3
+torch 2.13.0+cu130 cuda 13.0
+vllm 0.1.dev20051+g487ecf187
+flashinfer 0.6.18.dev20260819
+nvcc:
+Cuda compilation tools, release 13.0, V13.0.88
+Build cuda_13.0.r13.0/compiler.36424714_0
+
+=== flashinfer_cubin filename SM histogram ===
+total_cubins 44876
+  sm100: 22208
+  sm107: 17171
+  sm103: 4832
+  other: 665
+
+=== FlashInfer JIT / site .so (spec: libflashinfer*.so) ===
+NO_FLASHINFER_SO (kernels JIT on first use; flashinfer-jit-cache not installed)
+
+=== vLLM CUDA .so unique archs ===
+_C_stable_libtorch.abi3.so mb 76.3 archs ['sm_100', 'sm_100f', 'sm_110', 'sm_110f', 'sm_120', 'sm_120f', 'sm_80', 'sm_87', 'sm_89', 'sm_90', 'sm_90a']
+_flashkda_C.abi3.so mb 1.4 archs ['sm_100f', 'sm_120f', 'sm_90a']
+_flashmla_C.abi3.so mb 1.9 archs ['sm_100f', 'sm_90a']
+_flashmla_extension_C.abi3.so mb 0.3 archs ['sm_100f', 'sm_90a']
+_moe_C_stable_libtorch.abi3.so mb 44.7 archs ['sm_100', 'sm_100f', 'sm_110', 'sm_110f', 'sm_120', 'sm_120f', 'sm_80', 'sm_87', 'sm_89', 'sm_90', 'sm_90a']
+_qutlass_C.abi3.so mb 1.4 archs ['sm_100f']
+fs_io_C.abi3.so mb 0.2 archs ['(none)']
+third_party/deep_gemm/_C.cpython-310-aarch64-linux-gnu.so mb 1.5 archs ['(none)']
+third_party/deep_gemm/_C.cpython-311-aarch64-linux-gnu.so mb 1.5 archs ['(none)']
+third_party/deep_gemm/_C.cpython-312-aarch64-linux-gnu.so mb 1.5 archs ['(none)']
+third_party/deep_gemm/_C.cpython-313-aarch64-linux-gnu.so mb 1.5 archs ['(none)']
+third_party/deep_gemm/_C.cpython-314-aarch64-linux-gnu.so mb 1.5 archs ['(none)']
+vllm_flash_attn/_vllm_fa2_C.abi3.so mb 306.8 archs ['sm_80']
+vllm_flash_attn/_vllm_fa3_C.abi3.so mb 163.0 archs ['sm_90a']
+
+=== STRICT sm_121-only (vLLM _C + _moe) ===
+sm_100
+sm_100f
+sm_110
+sm_110f
+sm_120
+sm_120f
+sm_80
+sm_87
+sm_89
+sm_90
+sm_90a
+NON_SM121: sm_100 sm_100f sm_110 sm_110f sm_120 sm_120f sm_80 sm_87 sm_89 sm_90 sm_90a 
+WARN: multi-arch baseline (expected until rebuild)
+
+=== done ===

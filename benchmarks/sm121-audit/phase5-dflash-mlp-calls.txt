@@ -1,0 +1,107 @@
+# PHASE 5 — DFlash2 dense MLP call structure (read-only)
+# 2026-09-10. No production code / rebuild / soak.
+# Sources: patches/qwen3_dflash2.py, patches/dflash2_speculator.py,
+#          vllm dflash/speculator.py, DFlash2 config.json, target config.json,
+#          kernel-sum.txt (step4-profile), phase3/4 reports.
+
+DO NOT MODIFY PRODUCTION.
+FlashInfer / Marlin / vLLM / cuBLASLt / NCCL not rebuilt.
+
+## M=8
+
+M = num_query_per_req = 1 + DFLASH_TOKENS
+  DFLASH_TOKENS=7 (frozen)
+  dflash_config.block_size=8
+  comment in qwen3_dflash2.py: "bonus token plus the mask tokens"
+
+M=8 is the DFlash query block (1 bonus + 7 parallel mask/draft tokens).
+It is NOT 8 sequential token steps and NOT a CUDA-graph fusion unit.
+DFlashSpeculator: "processes all speculative tokens in one forward pass".
+
+## Who has the (12288,4096) BF16 MLP-up
+
+DFlash2: 5 Qwen3 layers, ALL dense, intermediate=12288.
+  target_layer_ids = [5, 14, 24, 33, 42]  (aux capture from TARGET, not DFlash layer index 0-2)
+Target: layers 0-2 mlp_layer_types=dense, same 12288.
+Target layers 3-44: sparse MoE (Marlin) + shared_experts BF16 intermediate=2048.
+Target attn: 34 KDA + 11 MLA. Not this GEMM shape.
+
+"DFlash2 layers 0-2 dense MLP" is a misnomer.
+  layers 0-2 dense = TARGET.
+  DFlash = 5-layer drafter, all dense, same GEMM shape as target 0-2.
+
+## Per decode step (1 in-flight request)
+
+Order (EAGLE-3 aux):
+  1. TARGET verify forward  (query = bonus + drafts being verified, typically ≤8)
+  2. capture aux at target layers 5,14,24,33,42
+  3. DFLASH propose         (ALWAYS M=8, one batched forward)
+  4. selector walk (Triton; 0.04% CUDA)
+
+DFlash each of 5 layers, once per propose:
+  attention_conv.prepare → self_attn → attention_conv.finish
+  mlp_conv.prepare       → mlp       → mlp_conv.finish
+  mlp = fused gate_up_proj + silu + down_proj
+  gate_proj and up_proj are NOT separate GEMMs (MergedColumnParallelLinear).
+
+Call count of the 100.7 MB gate_up per step:
+  DFlash propose : 5
+  Target dense 0-2 verify : 3
+  Total : 8
+  down_proj : also 8 (half the bytes, ~50 MB)
+
+Not 7 or 8 sequential per-token MLP calls.
+One GEMM with leading dim M=8 (or M=num_reqs*8 if batched).
+
+## Profile window (kernel-sum.txt + decode2.json)
+
+decode: 512 completion tokens, 16.29 s, 31.841 tok/s (profiler, not soak).
+total kernel 15.964 s.
+
+Inferred target decode-forwards from exact integer ratios:
+  Marlin n=11256 / (42 sparse * 2 w1/w2) = 134
+  single_group_topk n=5628 / 42 = 134
+  FlashInfer MLA n=1474 / 11 MLA layers = 134
+
+512 tok / 134 steps ≈ 3.82 tok/step (1 bonus + ~2.8 accepted drafts).
+Wall 16.29 s / 134 ≈ 122 ms/step.
+
+100.7 MB gate_up launches in this window: 134 * 8 = 1072.
+If production latency ≈ microbench 419.5 µs:
+  1072 * 419.5 µs = 0.450 s = 2.8% of kernel time.
+Plus 8 down_proj / step at ~half bytes ≈ +1.4% → DFlash+dense-0-2 MLP ≈ 4% CUDA.
+NOT 45%.
+
+cutlass_80 16x16_128x1: n=29674, 31.70%, mean 170.6 µs/launch (mixed shapes).
+That name is the whole unquantized BF16 F.linear family, not only MLP-up.
+
+## Existing kernel-sum split (do not recompute soak)
+
+Marlin WNA16 + moe_*     43.45%   routed experts only
+cutlass_80 bf16 family   ~44.95%  ALL eager F.linear (DFlash MLP/attn, target dense,
+                                  shared_experts, KDA/MLA projs, …)
+  of which 16x16_128x1   31.70%
+  of which 16x16_128x2   12.38%
+NCCL AR+AG                3.92%
+KDA delta rule            1.63%
+mHC TileLang              1.57%
+silu act_and_mul          0.90%
+FlashInfer MLA            0.44%
+DFlash Triton             0.04%
+
+Cannot split MLP-up vs MLP-down vs attn vs shared_experts from kernel names alone.
+Need GEMM (M,N,K) in a future nsys/ncu pass. Not done this phase (no production attach).
+
+## Skip / fuse / cache (structure only)
+
+Already fused: gate+up; already batched: 7 drafts in one M=8 GEMM.
+L2 24 MiB << 100.7 MB → weight cannot stay hot between layers or steps.
+M=2..64 latency flat (phase 3) → lowering DFLASH_TOKENS does not cut this GEMM time.
+DFLASH_TOKENS=7 is also boot-frozen.
+Skipping DFlash MLP = skipping the trained drafter → lose speculation.
+Target 0-2 cannot skip (verification).
+No per-step BF16 materialize (phase 4).
+
+## Not touched
+
+FlashInfer, Marlin, NCCL, vLLM _C, cuBLASLt, .env, IMAGE.

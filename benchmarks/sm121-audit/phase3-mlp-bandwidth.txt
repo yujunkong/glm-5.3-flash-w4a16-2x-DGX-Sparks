@@ -1,0 +1,44 @@
+# PHASE 3 — MLP-up memory traffic (measurement only, 2026-09-10)
+# Image: radixark/vllm-glm53-flash:sm121-v11-dflash2  GPU0 GB10
+# Scripts: probe_mlp_bw.py, probe_mlp_ncu.py
+# No .env / soak / rebuild.
+
+operand: F.linear  A=(M,4096) W=(12288,4096)  bf16  (DFlash MLP-up)
+weight_bytes = 12288 * 4096 * 2 = 100663296  (100.663 MB)
+act_bytes(M=8) = 65536
+out_bytes(M=8) = 196608
+compulsory_traffic(M=8) = 100925440  (100.925 MB)
+
+Is the full weight read per call?
+  YES. ncu Kernel2 (cutlass_80_wmma 16x16_128x1):
+    gpu__time_duration.avg = 440672 ns  (440.7 us)
+    l1tex global ld sum    = 150994944 B  (151.0 MB = 1.50 x weight)
+    L1 hit rate            = 13.47%
+    L2 hit rate            = 22.66%
+  Implied DRAM ≈ L1_miss * L2_miss
+    150.99e6 * (1-0.1347) * (1-0.2266) ≈ 101.1 MB
+  Matches compact weight 100.66 MB (entire matrix, one DRAM pass).
+  Extra ~50 MB is L1 overfetch absorbed by L1/L2, not extra DRAM.
+
+  dram__bytes_read.sum: not present on this GB10 ncu (unified memory).
+  ncu "Max Bandwidth" 14.32% is NOT LPDDR util (different pipe). Ignore for roof.
+
+Effective DRAM BW (compulsory 100.925 MB / 419.48 us hot) = 240.6 GB/s
+  vs LPDDR spec 273 GB/s  →  88.1%
+  ncu 101.1 MB / 440.7 us = 229.4 GB/s  →  84.0%
+
+FLOPS (M=8): 2*8*4096*12288 = 805306368
+  1.92 TFLOPS vs GB10 mma_bf16bf16f32 peak 212.9 TFLOPS  →  0.90% of TC peak
+
+Arithmetic intensity M=8: 7.98 FLOP/byte
+  ridge = 212.9e12 / 273e9 = 779.9 FLOP/byte
+  7.98 << 779.9  →  fundamentally bandwidth-bound
+  AI ≈ 2*M while weight dominates. Compute-bound needs M ≳ 390.
+
+M=2..64 (csv): latency stays 390–436 us. GB/s_hot 233–258. TFLOPS 0.48→15.4
+  Raising M improves AI and TFLOPS, does not cut latency (weight still 100.7 MB).
+
+Cold (L2 evict 64 MiB between iters): ~750–818 us, ~130 GB/s — extra eviction traffic.
+  Decode keeps W stationary; use hot numbers.
+
+Verdict: memory-bandwidth bound. Kernel swap cannot remove the 100.7 MB read.

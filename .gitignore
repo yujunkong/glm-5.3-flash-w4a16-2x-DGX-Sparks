@@ -1,5 +1,16 @@
-# Local environment (your IPs, paths, tokens) — never commit. Copy .env.example.
+# Local environment (IPs, paths, tokens) — never commit. Copy .env.example.
 .env
+.env.local
+.env.*.local
+# Cluster-specific A/B copies (keep .env.example / .env.base tracked)
+.env.glm53
+.env.intel-autoround
+.env.phase8-hook
+.env.sm121-native
+
+# Scratch / personal notes
+20260910_todo.md
+*.todo.md
 
 # Verbose / regenerable run logs (bench/bench_config.sh regenerates them).
 # Curated results (*.json, *.txt, RESULTS.md) ARE committed.

@@ -1,0 +1,28 @@
+# CUTLASS SM80 WMMA owner (read-only, 2026-09-10)
+# Profiler: /var/tmp/sm121-build/logs/step4-profile/kernel-sum.txt
+# Do not cite profiler 33 tok/s as soak baseline.
+
+Kernel                                          GPU%     Owning .so                         Loaded from                         Arch (name / library)
+cutlass_80_wmma bf16 16x16_128x1                31.70    libcublasLt.so.13.1.1.3            /usr/local/cuda/lib64/              CUTLASS-2 WMMA (Ampere schedule)
+cutlass_80_wmma bf16 16x16_128x2                12.38    same                               same (also nvidia/cu13/lib copy)    same
+other cutlass_80 bf16 GEMM                       ~0.87    same                               same
+CUTLASS SM80 bf16 GEMM total                    ~44.95
+Marlin WNA16                                    ~42.60    vllm/_moe_C_stable_libtorch.abi3.so  dist-packages/vllm                 sm_120 cubin (no sm_121)
+
+Origin: Case B — PyTorch eager ATen matmul → cuBLASLt, NOT vllm/_C, NOT FlashInfer, NOT DFlash Triton.
+strings hit: cutlass_80_wmma_tensorop_bf16_s161616gemm inside libcublasLt (629.9 MB).
+vLLM _C / _moe / libtorch_cuda.so: no that string.
+
+Same libcublasLt also embeds:
+  sm_120 ×1596, sm_100 ×1187, sm_90a ×1376, sm_80 ×482, sm_121 ×4 cubins, PTX sm_120 ×287.
+Heuristic is picking Ampere WMMA 16×16 for decode-shaped small GEMMs even though sm_120/sm_121 cubins exist.
+
+Caller: eager F.linear / torch.mm (ENFORCE_EAGER=1). High launch count (~30k) fits per-layer small-M GEMM
+(drafter dense + unquantized target linears). Not the Marlin expert GEMM.
+
+Smallest next A/B:
+  CUBLASLt log done (`cublaslt-probe.txt`): algoId=21 TILE_16x16, mlp_up ~LPDDR bound.
+  gate_linear.py is router-only (N=288) — do not soak it as the 45% fix.
+  Remaining leverage is fewer/fused dense GEMMs or a cublasLt that picks a non-WMMA algo for M=8; vLLM `_C` rebuild will not.
+
+Do not rebuild FlashInfer or Marlin for this kernel.

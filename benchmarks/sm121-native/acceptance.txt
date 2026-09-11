@@ -1,0 +1,19 @@
+spec_decode metrics found:
+  vllm:spec_decode_num_accepted_tokens_created = 1788966722.5333724
+  vllm:spec_decode_num_accepted_tokens_per_pos_created = 1788966722.5351615
+  vllm:spec_decode_num_accepted_tokens_total = 4908.0
+  vllm:spec_decode_num_draft_tokens_created = 1788966722.533149
+  vllm:spec_decode_num_draft_tokens_total = 12264.0
+  vllm:spec_decode_num_drafts_created = 1788966722.531356
+  vllm:spec_decode_num_drafts_total = 1752.0
+per_pos accepted (labeled):
+  pos0: accepted=1428 rate_vs_drafts=0.815 cond=nan
+  pos1: accepted=1087 rate_vs_drafts=0.620 cond=0.761
+  pos2: accepted=797 rate_vs_drafts=0.455 cond=0.733
+  pos3: accepted=596 rate_vs_drafts=0.340 cond=0.748
+  pos4: accepted=451 rate_vs_drafts=0.257 cond=0.757
+  pos5: accepted=313 rate_vs_drafts=0.179 cond=0.694
+  pos6: accepted=236 rate_vs_drafts=0.135 cond=0.754
+
+drafted=12264 accepted=4908 ratio=0.400
+check band manually

@@ -1,0 +1,57 @@
+# PHASE 7 live — cutlass_80 16x16_128x1 attribution
+# 2026-09-10. Same nsys capture as 128x2 (no new serve).
+# Report: /var/tmp/glm53-w4a16-cache/sm121-audit-p7/phase7-live.nsys-rep
+# Parser: parse_live_128x1.py  (demangledName + Python BT blobs)
+#
+# NOT a soak. Isolated GEMM is not used as live attribution.
+# FlashInfer / Marlin / NCCL / vLLM _C / KDA fusion not changed.
+
+## Capture window
+
+CUDA kernel time  1213.34 ms
+16x16_128x1       1884 launches, 302.22 ms, **24.91% of CUDA kernel time**
+
+N_est = gridY * 128. M/K are not in CUPTI. dtype = bf16 (kernel name).
+calls/step ~ n / 9 decode-sized forwards in this 60-tok completion.
+
+## Live 128x1 breakdown (stack-confirmed)
+
+| pctCUDA | n | n/step~ | avg us | med us | grid | N_est | Python caller | operation |
+|--------:|--:|--------:|-------:|-------:|------|------:|---------------|-----------|
+| **10.75** | 286 | ~32 | 456 | 457 | 8x99x1 | 12672 | kda.py:327 ColumnParallel apply | **KDA in_proj_qkvbfg_a** |
+| 4.77 | 286 | ~32 | 202 | 201 | 8x32x1 | 4096 | kda.py:371 RowParallel apply | **KDA o_proj** |
+| 2.44 | 90 | ~10 | 329 | 422 | 8x96x1 | 12288 | qwen3_dflash2.py:177 | DFlash MLP gate_up |
+| 2.32 | 92 | ~10 | 306 | 310 | 8x32x1 | 4096 | mla.py:245 | MLA o_proj |
+| 1.92 | 378 | ~42 | 62 | 47 | 8x32x1 | 4096 | model.py:149 | target MLP down_proj |
+| 1.02 | 27 | ~3 | 457 | 457 | 8x96x1 | 12288 | model.py:147 | target dense gate_up |
+| 0.52 | 8 | ~1 | 782 | 786 | 8x32x1 | 4096 | qwen3_dflash.py:782 | DFlash combine |
+| 0.45 | 92 | ~10 | 59 | 59 | 8x32x1 | 4096 | attention.py:318 | MLA other |
+| 0.29 | 45 | ~5 | 78 | 76 | 8x32x1 | 4096 | qwen3_dflash.py:271 | DFlash MLP down |
+| 0.17 | 286 | ~32 | 7 | 7 | 8x32x1 | 4096 | kda.py:344 | KDA f_b/g_b |
+| 0.14 | 286 | ~32 | 6 | 6 | 8x32x1 | 4096 | kda.py | KDA other |
+| 0.12 | 8 | ~1 | 183 | 183 | 8x40x1 | 5120 | qwen3_dflash.py:533 | DFlash project_context_kv |
+
+Sum of rows = 24.91% CUDA (all 1884 launches classified).
+
+N_est 12672 ≈ live fused in_proj N=12576 (tile padding). P6 used N=12480; live is 12576.
+
+## DRAM / L2 / AI (same-shape microbench, not ncu-on-serve)
+
+ncu was not attached to live serve. Isolated F.linear on the confirmed shapes
+(probe_live_shape_bw.py, probe_live_kernel_cold.py), GPU0, stock image:
+
+| operation | isolated us | W MB | GB/s | vs 273 | L2 |
+|---|---:|---:|---:|---:|---|
+| KDA in_proj (8,12576,4096) | hot 440 / cold 454 | 103.02 | 227–234 | 83–86% | 103 MB > L2 24 MB, cold≈hot |
+| KDA o_proj (8,4096,4096) | hot 124 / cold 149 | 33.55 | 226–271 | 83–99% | cold still DRAM-ish |
+| DFlash/target gate_up (8,12288,4096) | P3 ncu 441 | 100.66 | 241 | 88% | L2 hit 22.7% |
+
+in_proj AI ≈ 7.98 FLOP/byte (ridge ~780). Same LPDDR bound as P3 MLP-up.
+
+## Optimization gate (this capture)
+
+A ≥5% CUDA: **only KDA in_proj_qkvbfg_a (10.75%)**.
+B 2–5%: KDA o_proj 4.77%, MLA o_proj 2.32%. DFlash MLP skip is forbidden.
+C <2%: do not patch.
+
+128x1 as a kernel is the wrong object. Do not swap 16x16_128x1 wholesale.

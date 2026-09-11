@@ -1,0 +1,5 @@
+== MoE lines ==
+(Worker_TP0 pid=200) INFO 09-10 13:45:18 [int_wna16.py:254] Using 'MARLIN' WNA16 MoE backend.
+(Worker_TP0 pid=200) INFO 09-10 13:49:31 [int_wna16.py:409] Using MarlinExperts
+
+BACKEND=marlin (pinned in .env)

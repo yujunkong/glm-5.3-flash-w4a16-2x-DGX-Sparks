@@ -1,0 +1,79 @@
+# PHASE 7 live — cutlass_80 16x16_128x2 attribution
+# 2026-09-10. TP=2 nnodes=2 serve, image sm121-v11-dflash2
+# nsys 2025.3.2 launch-wrap rank0 only (same vLLM args as .env; not a soak)
+# Capture: 1 chat completion, prompt 28 tok, completion 60 tok, thinking off
+# Report: /var/tmp/glm53-w4a16-cache/sm121-audit-p7/phase7-live.nsys-rep
+# Stats:  benchmarks/sm121-audit/phase7-live-kern-sum.txt
+#
+# Method: nsys launch --trace=cuda,nvtx,cublas-verbose
+#         --python-backtrace=cuda --cudabacktrace=kernel --python-sampling=true
+#         nsys start after /health; nsys stop after the request.
+# Python stacks: NVTX domain "Python Backtrace on CUDA" blobs (--include-blobs).
+# Matched each 16x16_128x2 kernel to cuLaunch correlationId → nearest Python BT.
+#
+# NOT a soak. TPS from this window is discarded.
+# Isolated M=8 N=8192 K=4096 microbench is NOT used as a live op.
+# No source/kernel/cuBLASLt/fusion/FI/Marlin/NCCL/_C/.env changes.
+
+## Capture window
+
+CUDA kernel time  1213.3 ms  (6.54 s wall of GPU traces)
+16x16_128x2       1582 launches, 153.1 ms, **12.62% of CUDA kernel time**
+16x16_128x1       24.91%  (not this task; includes KDA fused in_proj)
+Marlin WNA16      41.70%  (parked)
+NCCL AllReduce    9.2%
+
+128x2 avg 96.8 µs, median 14.4 µs, min 4.4 µs, max 2636 µs
+→ **not one GEMM**. Same CUTLASS tile, many F.linear shapes.
+
+## Live 128x2 breakdown (stack-confirmed)
+
+pctCUDA is share of all CUDA kernels in this capture.
+N_est = gridY * 128  (kernel name 16x16_128x2; lm_head gridY=605 → 77440 = vocab/TP2).
+M and K are **not** in the CUPTI kernel record. dtype from kernel name: bf16.
+calls/step uses ~9 decode-sized forwards in this 60-tok completion (same request style as P8).
+
+| pctCUDA | n | n/step~ | avg µs | med µs | grid | N_est | module (Python BT) | operation |
+|--------:|--:|--------:|-------:|-------:|------|------:|--------------------|-----------|
+| 6.03 | 351 | ~39 | 209 | 208 | 8x16x1 | 2048 | glm5next model.py:147 `Glm5NextMLP.forward` via `shared_experts.py` | **shared_experts.gate_up_proj** |
+| 3.61 | 17 | ~2 | 2580 | 2575 | 8x605x1 | 77440 | vocab_parallel_embedding.py:75 apply | **lm_head** (see split) |
+| 0.87 | 92 | ~10 | 114 | 113 | 8x64x1 | 8192 | mla.py:213 `q_proj_layer(...)` | **MLA q_b_proj** |
+| 0.59 | 92 | ~10 | 78 | 78 | 8x16x1 | 2048 | mla.py:175 + deepseek_v2.py:945 | **MLA fused_qkv_a_proj** |
+| 0.46 | 45 | ~5 | 124 | 122 | 8x24x1 | 3072 | qwen3_dflash.py:256 | **DFlash qkv_proj** |
+| 0.41 | 351 | ~39 | 14 | 14 | 8x3x8 | — | model.py:270 `self.gate` | **MoE router** |
+| 0.37 | 90 | ~10 | 50 | 47 | 8x8x1 | 1024 | qwen3_dflash2.py:111 prepare | **DFlash kernel_projection** |
+| 0.14 | 351 | ~39 | 5 | 5 | 8x3x8 | — | moe_runner.py:863 + gate_linear.py | **MoE gate (shared path)** |
+| 0.07 | 92 | ~10 | 9 | 8 | 8x2x8 | 256 | attention.py:327 `wk_weights_proj` | **MLA indexer wk_weights_proj** |
+| 0.06 | 92 | ~10 | 7 | 7 | 8x1x8 | 128 | attention.py:390 `F.linear(index_kpool_compress_gate)` | **MLA kpool gate** |
+| 0.01 | 9 | ~1 | 13 | 13 | 8x2x8 | 256 | qwen3_dflash2.py:241 | **DFlash hidden_projection** |
+
+Sum of rows = 12.62% CUDA (all 1582 launches classified).
+
+### lm_head split (same 17 launches)
+
+- DFlash `compute_candidates` / qwen3_dflash2.py: 9 launches, 23.1 ms, ~1.91% CUDA
+- target `compute_logits` / glm4_1v.py: 8 launches, 20.7 ms, ~1.71% CUDA
+
+### Confirmed absences in 128x2
+
+- **No** KDA fused `in_proj_qkvbfg_a` (that family is 16x16_128x1).
+- **No** separate KDA q/k/v Linear.
+- **No** isolated-shape `N=8192 K=4096` needed to explain 128x2.
+- Live N=8192 128x2 is **MLA q_b_proj** (mla.py:213), K not in nsys (constructor K=q_lora_rank=1536 on this image; not re-measured here).
+
+## DRAM / L2 / AI
+
+**Not measured.** nsys CUDA+Python BT has no per-kernel DRAM or L2 hit. ncu was not attached (would be a separate pass). Isolated-microbench GB/s are not applied to these live ops.
+
+## Optimization (this phase: measurement only)
+
+128x2 as a **kernel** is the wrong object: 12.6% CUDA, 11 stack-distinct F.linear/GEMM ops.
+Largest single 128x2 op: **shared_experts.gate_up_proj 6.03% CUDA**, ~39×/step, ~209 µs.
+That is below the already-identified KDA fused in_proj (128x1, P6 11.42%).
+Do not patch fusion, tile, algorithm, FI, Marlin, NCCL, or `_C` on this result.
+
+## Next measurement
+
+Decompose **16x16_128x1 (24.9% CUDA this window)** with the same Python-BT method
+(expected to include KDA `in_proj` + o_proj + dense/DFlash MLP already ranked in P6).
+FI / Marlin / NCCL / `_C` remain parked.

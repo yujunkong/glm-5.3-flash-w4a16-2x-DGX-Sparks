@@ -83,11 +83,15 @@ fi
 
 mkdir -p "$CACHE_HOST_PATH" "$CACHE_HOST_PATH/root-cache" "$CACHE_HOST_PATH/torchinductor" "$CACHE_HOST_PATH/tilelang"
 
-# kpool top-k SM121 patch (if present). Suppressed with GLM53_SM121_MLA=1:
-# the SM120 overlay generates its own indexer (base = this same patch + trim),
-# and two mounts on the same target would be ambiguous.
+# kpool top-k SM121 patch. Empty / missing PATCH_KPOOL_HOST → repo overlay.
+# Suppressed with GLM53_SM121_MLA=1: the SM120 overlay generates its own indexer
+# (base = this same patch + trim); two mounts on the same target would clash.
 PATCH_ARGS=()
-if [ "${GLM53_SM121_MLA:-0}" != "1" ] && [ -n "${PATCH_KPOOL_HOST:-}" ] && [ -f "$PATCH_KPOOL_HOST" ]; then
+_KPOOL_REPO="$SCRIPT_DIR/patches/sparse_attn_indexer_kpool.py"
+if [ -z "${PATCH_KPOOL_HOST:-}" ] || [ ! -f "${PATCH_KPOOL_HOST}" ]; then
+  PATCH_KPOOL_HOST="$_KPOOL_REPO"
+fi
+if [ "${GLM53_SM121_MLA:-0}" != "1" ] && [ -f "$PATCH_KPOOL_HOST" ]; then
   PATCH_ARGS=(-v "$PATCH_KPOOL_HOST:/usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/sparse_attn_indexer_kpool.py:ro")
   echo "[patch] SM121 sparse_attn_indexer_kpool mounted"
 fi
@@ -122,6 +126,16 @@ if [ -f "$_DFLASH2_SPEC_PATCH" ]; then
   echo "[patch] dflash2_speculator.py mounted (selector_top_k override)"
 fi
 
+# GB10 router GEMM: cuBLAS bf16→fp32 out_dtype (vLLM #54048). Off by default;
+# enable with APPLY_GATE_LINEAR=1 after a winning A/B.
+_GATE_LINEAR_PATCH="${GATE_LINEAR_PATCH:-$SCRIPT_DIR/patches/gate_linear.py}"
+if [ "${APPLY_GATE_LINEAR:-0}" = "1" ] && [ -f "$_GATE_LINEAR_PATCH" ]; then
+  PATCH_ARGS+=(
+    -v "$_GATE_LINEAR_PATCH:/usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/fused_moe/router/gate_linear.py:ro"
+  )
+  echo "[patch] gate_linear.py mounted (GB10 cuBLAS out_dtype)"
+fi
+
 # DFlash _prepare_dflash_inputs_kernel JIT warmup (profile/dummy runs skip it).
 _DFLASH_WARMUP_PATCH="${DFLASH_WARMUP_PATCH:-$SCRIPT_DIR/patches/spec_decode_rejection_warmup.py}"
 if [ -f "$_DFLASH_WARMUP_PATCH" ]; then
@@ -140,6 +154,7 @@ if [ -f "$_MHC_WARMUP_PATCH" ]; then
   )
   echo "[patch] deepseek_v4_mhc_warmup.py mounted (GLM mHC TileLang JIT)"
 fi
+echo "[final] overlays: kpool glm5next dflash2(qwen3+spec) dflash-warmup mhc-warmup APC=${APPLY_APC_PATCH:-1} gate_linear=${APPLY_GATE_LINEAR:-0} mla=${GLM53_SM121_MLA:-0}"
 
 # APC patch: hybrid prefix-cache zeroed by the drafter SWA group (stock vLLM
 # marks every eagle group and the drafter SWA zeroes the hybrid min -> 0 hits).
@@ -227,6 +242,21 @@ if [ -n "${KV_CACHE_MEMORY:-}" ]; then KV_ARGS=(--kv-cache-memory "$KV_CACHE_MEM
 AUTOTUNE_ARGS=()
 if [ "${DISABLE_FLASHINFER_AUTOTUNE:-0}" = "1" ]; then AUTOTUNE_ARGS=(--no-enable-flashinfer-autotune); fi
 
+# Observation-only F.linear tracer (LINEAR_HOOK=1). Default off.
+HOOK_ARGS=()
+if [ "${LINEAR_HOOK:-0}" = "1" ]; then
+  _HOOK="${LINEAR_HOOK_HOST:-$SCRIPT_DIR/patches/hook_linear_8192.py}"
+  if [ -f "$_HOOK" ]; then
+    # Must overlay the stdlib sitecustomize (apport). dist-packages is later on sys.path.
+    HOOK_ARGS=(
+      -v "$_HOOK:/usr/lib/python3.12/sitecustomize.py:ro"
+      -v "$_HOOK:/opt/glm53-linear-hook/sitecustomize.py:ro"
+      -e PYTHONPATH=/opt/glm53-linear-hook
+    )
+    echo "[hook] F.linear (8192,4096) tracer mounted"
+  fi
+fi
+
 # Production default is eager (ENFORCE_EAGER=1). 0 drops --enforce-eager so
 # Torch Compile / CUDA Graphs can run for A/B; DFlash falls back to eager
 # draft if the attention backend cannot capture FULL graphs.
@@ -276,6 +306,7 @@ docker run --gpus all -d \
   "${PATCH_ARGS[@]}" \
   "${APC_ARGS[@]}" \
   "${SM121_MOUNTS[@]}" \
+  "${HOOK_ARGS[@]}" \
   -e VLLM_HOST_IP="$HOST_IP" \
   -e HF_HOME=/cache/huggingface \
   -e TORCHINDUCTOR_CACHE_DIR=/cache/torchinductor \

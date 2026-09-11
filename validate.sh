@@ -82,8 +82,23 @@ _img="${IMAGE:-radixark/vllm-glm53-flash:sm121-v11-dflash2}"
 if docker image inspect "$_img" >/dev/null 2>&1; then ok "image $_img local ($(docker images --format '{{.Size}}' "$_img" 2>/dev/null | head -n1))"; else warn "image not pulled — run docker pull $_img"; fi
 _fallback="${IMAGE_FALLBACK:-ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v11-dflash2}"
 if [ "$_img" != "$_fallback" ] && docker image inspect "$_fallback" >/dev/null 2>&1; then ok "fallback $_fallback also local"; fi
-if [ -n "${PATCH_KPOOL_HOST:-}" ] && [ -f "${PATCH_KPOOL_HOST:-}" ]; then ok "SM121 kpool patch $PATCH_KPOOL_HOST present"; else warn "kpool patch not found at ${PATCH_KPOOL_HOST:-\$PATCH_KPOOL_HOST} (needed on images < v11)"; fi
+if [ -n "${PATCH_KPOOL_HOST:-}" ] && [ -f "${PATCH_KPOOL_HOST:-}" ]; then ok "SM121 kpool patch $PATCH_KPOOL_HOST present"; elif [ -f "$SCRIPT_DIR/patches/sparse_attn_indexer_kpool.py" ]; then ok "SM121 kpool patch $SCRIPT_DIR/patches/sparse_attn_indexer_kpool.py (repo default)"; else warn "kpool patch missing (patches/sparse_attn_indexer_kpool.py)"; fi
 if [ "${GLM53_SM121_MLA:-0}" = "1" ]; then ok "SM120 overlay ACTIVE (docs/patch_sm121_mla.py + backend_per_kind mla_attention)"; else echo "  SM120 overlay off (SM90 baseline) — enable with GLM53_SM121_MLA=1"; fi
+echo ""
+
+# 7b. KEEP overlays used by ./start.sh
+echo "--- overlays (start.sh KEEP) ---"
+for f in \
+  patches/glm5next_model.py \
+  patches/qwen3_dflash2.py \
+  patches/dflash2_speculator.py \
+  patches/spec_decode_rejection_warmup.py \
+  patches/deepseek_v4_mhc_warmup.py \
+  patches/sparse_attn_indexer_kpool.py \
+  docs/patch_hybrid_prefix_hit.py
+do
+  [ -f "$SCRIPT_DIR/$f" ] && ok "$f" || bad "missing $f"
+done
 echo ""
 
 # 8. network

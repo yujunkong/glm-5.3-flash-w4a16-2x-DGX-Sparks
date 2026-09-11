@@ -1,0 +1,26 @@
+# PHASE 1 — FlashInfer SM121 (stock image, 2026-09-10)
+# Image: radixark/vllm-glm53-flash:sm121-v11-dflash2
+# Production knobs unchanged. No Dockerfile/.env/start.sh edit.
+
+flashinfer 0.6.18.dev20260819
+libflashinfer*.so: NONE (site .so count = 0)
+flashinfer_cubin: 44876 files
+  sm100=22208 sm107=17171 sm103=4832 other=665
+  sm121 in filename: 0
+FLASHINFER_CUDA_ARCH_LIST at launch: 12.1a
+Runtime MLA (prior engine log, stock): FLASHINFER_MLA_SPARSE_SM90, arch=sm121
+Production GLM53_SM121_MLA=0 (SM120 overlay off)
+
+NaN fix PR flashinfer#2689 (e43f49e) merged 2026-05-07.
+This nightly is 2026-08-19 → fix is IN the package.
+xqa.py contains MLA_BF16. mla/_sparse_mla_sm120.py contains SM121.
+No NaN strings in those files. P1 391/Tokyo on stock and on native-serve.
+
+Profiler (stock, not soak): FlashInfer MLA paged attn ~0.37–0.44% CUDA time.
+CUDA Graph: production ENFORCE_EAGER=1. Graphs already MEASURED_DISCARD on stock.
+
+Full FI AOT sm_121a (261 .so) + vLLM rebuild was served as glm53-flash:sm121-native-serve.
+Soak 32.288 vs 34.734–35.538 → MEASURED_DISCARD (benchmarks/sm121-native/soak.json).
+
+Verdict: FlashInfer is not the 35 tok/s bottleneck. Do not rebuild FI again for TPS.
+Do not enable CUDA graphs as a Phase 1 success check.

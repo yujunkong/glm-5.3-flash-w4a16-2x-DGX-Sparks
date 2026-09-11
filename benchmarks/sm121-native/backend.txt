@@ -1,0 +1,6 @@
+== MoE lines ==
+(Worker_TP0 pid=240) INFO 09-09 15:06:25 [compressed_tensors_moe.py:132] Using CompressedTensorsWNA16MoEMethod
+(Worker_TP0 pid=240) INFO 09-09 15:06:25 [int_wna16.py:254] Using 'MARLIN' WNA16 MoE backend.
+(Worker_TP0 pid=240) INFO 09-09 15:09:58 [int_wna16.py:409] Using MarlinExperts
+
+BACKEND=marlin (pinned in .env)

@@ -1,0 +1,104 @@
+# PHASE 8 — live TP=2 F.linear caller for N=8192 K=4096
+# 2026-09-10. Serve: radixark/vllm-glm53-flash:sm121-v11-dflash2
+# Hook: patches/hook_linear_8192.py via LINEAR_HOOK=1 (sitecustomize)
+# Dumps: phase8-linear-hook-r0.json / r1.json (identical shape mix)
+
+DO NOT MODIFY production fusion / q_proj / k_proj / v_proj on this result.
+FI / Marlin / NCCL / _C / KDA in_proj kernel work still parked.
+
+## Setup
+
+TP=2 nnodes=2, DFlash 7, enforce-eager, MoE marlin.
+Arm file after /health; one decode: prompt 28 tok, completion 60 tok, thinking off.
+~9 M=8 decode forwards (60/9 ≈ 6.7 tok/step) + one M=28 prefill.
+F.linear/unquantized GEMM calls after arm: 4160 / rank. All 4160 accounted in top_shapes.
+
+## P0 answer
+
+Live TP=2 decode **never** calls `F.linear` with weight `(8192, 4096)`.
+
+Rank 0 and rank 1: zero hits for that (N,K). The checkpoint tensors
+
+```text
+KDA q_proj / k_proj / v_proj  (8192, 4096)
+```
+
+are **not** separate GEMMs on this stack. They are packed into fused
+
+```text
+KDA in_proj_qkvbfg_a
+M=8 N=12576 K=4096   (TP=2 local)
+~305 calls ≈ 34 layers × 9 decode steps
+```
+
+kda.py forward is one `self.in_proj_qkvbfg_a(hidden_states)` then split. No q/k/v Linear.
+
+N=12576 vs phase-6 microbench N=12480: TP=2 replicated `f_a`/`g_a` inflate the merged output
+(q+k+v local 4096×3 + b 32 + f_a 128 + g_a 128 = 12576). Same fused op, slightly wrong N in P6.
+
+## What N=8192 actually is (live)
+
+The only F.linear with N=8192:
+
+```text
+MLA q_b_proj
+M=8 N=8192 K=1536
+prefix language_model.model.layers.{3,7,11,...,43}.self_attn.q_b_proj
+stack  glm5next/attention.py:624 → mla.py:213 → ColumnParallelLinear
+11 MLA layers × ~9 decode steps = 98 calls (plus 11 prefill M=28)
+```
+
+This is TP-sharded `q_b` (full unsharded is 16384×1536). It is **not** KDA q/k/v.
+
+## Duplicate-projection question
+
+Fused `in_proj N=12576` and unfused `q/k/v N=8192` do **not** both run.
+The “fused인데 왜 N=8192가 따로 도나?” live answer: **it doesn’t.**
+N=8192 on this path is MLA `q_b_proj` (K=1536), a different module.
+
+Do not treat the P7 20.5% bucket as wasted KDA q/k/v recompute. That hypothesis is rejected.
+
+## Hook-confirmed prefixes (STACK_NK)
+
+| kind | suffix | M | N | K | n (decode M=8) | module |
+|---|---|---:|---:|---:|---:|---|
+| kda | o_proj | 8 | 4096 | 4096 | 304 | KDA `RowParallelLinear` o_proj |
+| mla | o_proj | 8 | 4096 | 8192 | 98 | MLA o_proj |
+| mla | q_b_proj | 8 | 8192 | 1536 | 98 | MLA q_b_proj |
+
+`src=gemm` = `default_unquantized_gemm` → `F.linear` (vLLM Linear.apply).
+
+## Other M=8 F.linear shapes (count only; prefix not captured)
+
+| N | K | n | inferred (from kda.py / MLP, not hooked prefix) |
+|---:|---:|---:|---|
+| 12576 | 4096 | 305 | KDA fused `in_proj_qkvbfg_a` (matches 34×9) |
+| 4096 | 4096 | 304 | KDA o_proj (prefix confirmed) |
+| 2048 | 4096 | 473 | likely shared-expert `gate_up` TP-sharded; count ≠ 42×9, still unverified |
+| 12288 | 4096 | 72 | dense+DFlash MLP gate_up (8×/step ×9) |
+| 3072 | 4096 | 45 | DFlash 5 layers ×9 |
+| 288 | 4096 | 750 | MoE router (288 experts); ~83/step |
+| 4096 | 128 | 609 | KDA q/k conv1d (fp32 ColumnParallel, K=conv_size) |
+| 8192 | 1536 | 98 | MLA q_b (prefix confirmed) |
+| 4096 | 8192 | 98 | MLA o_proj (prefix confirmed) |
+
+## What this does to the 20.5% / 128x2 story
+
+P7 matched `cutlass_80_wmma 128x2 ~288 µs` to isolated `F.linear M=8 N=8192 K=4096`.
+That GEMM **is not launched** on the production TP=2 decode stack.
+
+The production 128x2 launches must be **other** BF16 F.linear shapes that pick the same CUTLASS tile
+(MLA `q_b` 8192×1536 was already ~183 µs 128x2 in P7; plus shared-expert / remaining mix).
+Re-attribute from live nsys or by microbench of the table above. No fusion patch.
+
+## Not done / parked
+
+- Prefix for N=2048 and N=12576 (need STACK_NK expand; shape+count already identify in_proj)
+- nsys Python backtrace (not needed; hook caught the serve path)
+- KDA `in_proj` kernel opt (still after a real remaining bottleneck map)
+- FI / Marlin / NCCL / `_C`
+
+## Hook serve
+
+Boot used `.env.phase8-hook` (`LINEAR_HOOK=1`). Do not leave that as production.
+Restore: `ENV_FILE=.env SKIP_PULL=1 SKIP_SYNC=1 ./start.sh start`

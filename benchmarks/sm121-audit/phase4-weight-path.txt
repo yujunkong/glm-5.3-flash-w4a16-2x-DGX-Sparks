@@ -1,0 +1,55 @@
+# PHASE 4 — MLP-up weight path (read-only, 2026-09-10)
+# Probe: benchmarks/sm121-audit/probe_weight_path.py
+# No .env / soak / rebuild / production edit.
+
+Q1 stored MLP-up dtype
+  DFlash2 drafter  /var/tmp/models/GLM-5.3-Flash-DFlash2/model.safetensors
+    81/81 tensors BF16. No packed/scale.
+    layers.{0..4}.mlp.gate_proj.weight  (12288, 4096) BF16
+    layers.{0..4}.mlp.up_proj.weight    (12288, 4096) BF16
+    layers.{0..4}.mlp.down_proj.weight  (4096, 12288) BF16
+  Target W4A16  /var/tmp/glm-5.3-flash-w4a16-mtp
+    layers.{0,1,2}.mlp.{gate,up}_proj.weight  (12288, 4096) BF16   [quantization_config.ignore]
+    layers.{0,1,2}.mlp.down_proj.weight       (4096, 12288) BF16
+    layers.3+ routed experts: I32 weight_packed + BF16 weight_scale  (W4 pack-quantized)
+    layers.3+ shared_experts.{gate,up}_proj   (2048, 4096) BF16     [also ignore]
+    layers.3+ mlp.gate.weight                 (288, 4096) BF16      [ignore]
+
+Q2 W4 → BF16 conversion
+  NONE on the 100.663 MB path. Those tensors are BF16 in the checkpoint.
+  W4 packed exists only on routed MoE experts (moe_intermediate=2048), not on 12288 MLP.
+
+Q3 BF16 weight materialized?
+  Persistent nn.Parameter / MergedColumnParallelLinear.weight (load-time fuse of gate+up).
+  Not a per-step workspace buffer.
+
+Q4 recreated per decode step?
+  NO. Same storage for the life of the process.
+
+Q5 persistent between decode steps?
+  YES. L2 24 MiB cannot hold 100.7 MB, so each GEMM still DRAM-fills the weight
+  (phase3: implied DRAM ≈ 101 MB, L2 hit 22.7%). That is cache capacity, not rematerialize.
+
+Q6 can original W4 reach this GEMM?
+  There is no W4 original for this module. Ignore-list + patch force quant_config=None.
+  Reaching Marlin would require quantizing these BF16 tensors (new checkpoint / not current model).
+
+Q7 existing quantized GEMM for this shape?
+  vLLM Marlin WNA16 covers GPTQ/AWQ Linear and MoE experts.
+  Hot path uses Unquantized MergedColumnParallelLinear → ATen F.linear → cuBLASLt.
+  Expert Marlin shape is 2048 not 12288.
+
+Q8 Marlin involved in this MLP-up?
+  NO. MarlinExperts = routed experts only (profiler 43% separate bucket).
+
+Q9 why F.linear bypasses quantized MoE?
+  Two modules, both intentionally unquantized:
+    (a) DFlash2 drafter is a BF16 Qwen3 (config.dtype=bfloat16, quant_config=None).
+    (b) Target dense layers 0–2 and all shared_experts: compressed-tensors ignore
+        + patches/glm5next_model.py quant_config=None (fused gate_up_proj KeyError otherwise).
+  TP=2 shards fused gate_up [12288,12288] → per-rank (12288, 4096) = the measured GEMM.
+
+Q10 traffic
+  materialization: 0 extra bytes/step (no dequant of this weight)
+  GEMM: 100.663 MB DRAM read of persistent BF16 W  (phase3 ncu)
+  intermediate copies: activation-only (SiluAndMul on ~8 x 12288), not the 100 MB W

@@ -1,0 +1,21 @@
+# PHASE 2 — Marlin CUDA kernel (stock image, 2026-09-10)
+# MOE_BACKEND=marlin. File: vllm/_moe_C_stable_libtorch.abi3.so
+
+sm_121 in _moe cubin: NO
+sm_121 in _C cubin:   NO
+PTX JIT: YES — cuobjdump --list-ptx shows sm_80 PTX (many). Named Marlin path is cubin.
+Closest production cubin: sm_120 ×29 (also sm_80×22 sm_89×12 sm_100×10 sm_110×10 …)
+
+Kernel name (profiler + strings):
+  marlin_moe_wna16::Marlin<...>  (~42.60% CUDA, 11256 launches)
+  plus moe helpers (topk/align/sum) ~0.85%
+  Marlin/MoE bucket total ~43.45%
+
+Blackwell Tensor Core: sm_120 cubins are the live Marlin path on GB10
+(sm_121 ≈ sm_120 binary-compatible; sm_121a is the TC-specific extra).
+Native rebuild put sm_121a in _moe (29) + sm_80 leftover (2) and LOST soak.
+
+_C_stable_libtorch.abi3.so: sm_120×81, no sm_121, no cutlass_80_wmma string.
+
+Verdict: Marlin is already sm_120 cubin, not PTX-JIT of the hot kernel.
+Wholesale sm_121a image swap is MEASURED_DISCARD. Do not repeat that rebuild.

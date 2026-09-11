@@ -1,0 +1,25 @@
+# CUBLASLt probe (no model load, GPU 0, stock image) 2026-09-10
+# Script: benchmarks/sm121-audit/probe_cublaslt.py
+# Do not cite these us as soak TPS.
+
+device: NVIDIA GB10  cap 12.1  SMs=48  smem_optin=101376  L2=24 MiB
+cublasLt heuristic always: algoId=21 tile=MATMUL_TILE_16x16  smCountTarget=48
+CtxInit: "per-ctx shared memory size limit = 0"
+
+Shape (eager F.linear bf16, M=8 = DFlash K=7+1)
+  (8,4096)x(12288,4096) mlp_up   -> Kernel2 cutlass_80_wmma 16x16_128x1   ~436 us
+                                   algo stages=MATMUL_STAGES_128x1  workspace=0  no splitK
+  (8,4096)x(4096,4096)  attn     -> same 16x16_128x1                     ~150 us
+  (8,4096)x(288,4096)   moe_gate -> 16x16_128x2 + splitK=9                ~245 us
+  (8,4096)x(512,4096)   kv_lora  -> 16x16_128x2 + splitK=9
+  (1,4096)x(12288,4096)          -> gemvx (not WMMA)
+
+M-sweep mlp_up time is flat M=2..64 (~410-470 us). Weight read ~100.7 MB in 436 us
+≈ 231 GB/s vs GB10 ~273 GB/s LPDDR5x. Bandwidth-bound, not "wrong SM" compute.
+
+ll_bf16_gemm is available but slower (523 vs 435 us) and fp32-out (router only).
+gate_linear.py only replaces moe_gate (N=288), a slice of the 45% bucket.
+APPLY_GATE_LINEAR A/B will not move soak toward 60 tok/s.
+
+Do not soak gate_linear as the cutlass_80 fix.
+Do not rebuild vLLM/_C for this kernel.
